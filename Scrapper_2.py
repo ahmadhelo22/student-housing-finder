@@ -12,9 +12,9 @@ from curl_cffi.requests import AsyncSession
 import time
 
 
-# الحد الأقصى للطلبات المتزامنة لتفادي صفحة الحماية (DataDome)
+# Max concurrent requests, to avoid triggering the bot-protection page (DataDome)
 MAX_CONCURRENCY = 4
-# ملف حفظ بصمات الصور على الجهاز لتفادي إعادة تحميلها في كل تشغيل
+# On-disk cache of image hashes, so images are not re-downloaded on every run
 IMAGE_HASH_CACHE_FILE = "image_hash_cache.json"
 
 
@@ -25,8 +25,8 @@ async def _fetch_all(
     binary: bool = False,
 ) -> List[Optional[Union[str, bytes]]]:
     """
-    تحميل مجموعة روابط في نفس اللحظة مع حد أقصى للطلبات المتزامنة.
-    ترجع قائمة بنفس ترتيب الروابط، وتضع None للرابط الذي فشل تحميله.
+    Download a batch of URLs concurrently, with a cap on simultaneous requests.
+    Returns a list in the same order as the URLs, with None for any URL that failed to load.
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -45,14 +45,14 @@ async def _fetch_all(
 
 
 def fetch_all(requests_list: List[tuple[str, Dict[str, str]]], **kwargs) -> List[Optional[Union[str, bytes]]]:
-    """نسخة متزامنة من _fetch_all لاستدعائها من كود عادي."""
+    """Synchronous wrapper around _fetch_all, for calling from regular (non-async) code."""
     if not requests_list:
         return []
     return asyncio.run(_fetch_all(requests_list, **kwargs))
 
 
 def _extract_next_data(html: Optional[str]) -> Optional[Dict[str, Any]]:
-    """استخراج بيانات __NEXT_DATA__ من صفحة HTML."""
+    """Extract the __NEXT_DATA__ JSON from an HTML page."""
     if not html:
         return None
     tree = HTMLParser(html)
@@ -66,7 +66,7 @@ def _extract_next_data(html: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def _get_numeric_price(price_val: Any) -> float:
-    """استخراج القيمة الرقمية للسعر للفرز وتجميع العقارات بدقة."""
+    """Extract the numeric price value, for accurate sorting and grouping of listings."""
     if isinstance(price_val, (int, float)):
         return float(price_val)
     if isinstance(price_val, str):
@@ -89,7 +89,7 @@ def _parse_listing_pages(
     output_file: Optional[str],
 ) -> List[Dict[str, Any]]:
     """
-    تحويل صفحات البحث المحملة مسبقاً إلى قائمة عقارات مدمجة ومرتبة من الأرخص للأغلى، وحفظها في JSON.
+    Turn already-downloaded search pages into one merged list of listings, sorted cheapest first, and save it as JSON.
     """
     all_extracted_properties = []
     seen_urls = set()
@@ -116,7 +116,7 @@ def _parse_listing_pages(
             else:
                 property_url = None
 
-            # تفادي تكرار نفس العقار إذا ظهر في أكثر من رابط
+            # Skip the same listing if it appears under more than one URL
             if property_url and property_url in seen_urls:
                 continue
             if property_url:
@@ -126,7 +126,7 @@ def _parse_listing_pages(
             floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
             transit_info = ld.get("mrt", {}).get("nearbyText") if ld.get("mrt") else None
 
-            # التحقق من توثيق الوكيل واسمه
+            # Agent verification status and name
             agent_info = ld.get("agent")
             is_agent_verified = agent_info.get("isAgentVerified", False) if isinstance(agent_info, dict) else False
             agent_name = agent_info.get("name") if isinstance(agent_info, dict) else None
@@ -161,9 +161,9 @@ def scrape_sites_parallel(
     jobs: List[tuple[Any, Union[str, List[str]], Optional[str]]],
 ) -> List[List[Dict[str, Any]]]:
     """
-    سحب عدة مواقع في نفس اللحظة: كل صفحات كل المواقع تُحمّل معاً، ثم تُحلل كل مجموعة على حدة.
-    jobs: قائمة من (كائن الموقع، رابط أو قائمة روابط، اسم ملف الحفظ)
-    ترجع قائمة نتائج بنفس ترتيب المواقع.
+    Scrape several sites at once: all pages of all sites are downloaded together, then each group is parsed separately.
+    jobs: list of (site object, URL or list of URLs, output file name)
+    Returns a list of results in the same order as the sites.
     """
     flat_requests = []
     spans = []
@@ -184,7 +184,7 @@ def scrape_sites_parallel(
 
 
 
-# خريطة توحيد الأسماء والاختصارات لتسهيل الاستخدام
+# Map of names and aliases, to normalize housing types and make them easier to use
 HOUSING_TYPE_ALIASES = {
     "studio": "studio",
     "master": "master_room",
@@ -243,26 +243,26 @@ class IProperties:
 
     def generate_url(
         self,
-        location: str,                                    # الكلمة المفتاحية: "Kuala Lumpur", "Cyberjaya", إلخ
-        max_price: int,                                   # الحد الأقصى للسعر بـ RM
-        min_price: Optional[int] = None,                  # الحد الأدنى (اختياري)
-        housing_type: Union[str, List[str]] = "studio",   # نوع أو قائمة أنواع السكن (يدعم أي توليفة)
-        room_type: Optional[str] = None,                  # (للتوافق القديم) نوع الغرفة إذا تم تمرير "room"
-        bedrooms: Optional[int] = None,                   # عدد الغرف (إذا كان entire_unit)
-        bathrooms: Optional[int] = None,                  # عدد الحمامات (اختياري)
-        property_structure: Literal["high_rise", "landed"] = "high_rise", # الافتراضي: أبراج
-        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # فلتر مستوى الطابق مباشرة على السيرفر
-        is_furnished: bool = True,                        # الافتراضي: مفروش بالكامل
-        distance_to_mrt: Optional[int] = None,            # المسافة للمترو بالكيلومتر (اختياري)
-        has_carpark: Optional[bool] = None,               # توفر موقف سيارة (اختياري)
-        is_verified_agent: bool = True,                   # فلتر الوكيل الموثق (افتراضياً: True)
+        location: str,                                    # Search keyword: "Kuala Lumpur", "Cyberjaya", etc.
+        max_price: int,                                   # Maximum price in RM
+        min_price: Optional[int] = None,                  # Minimum price (optional)
+        housing_type: Union[str, List[str]] = "studio",   # Housing type or list of types (any combination is supported)
+        room_type: Optional[str] = None,                  # (Legacy) room type when housing_type="room" is passed
+        bedrooms: Optional[int] = None,                   # Number of bedrooms (when entire_unit)
+        bathrooms: Optional[int] = None,                  # Number of bathrooms (optional)
+        property_structure: Literal["high_rise", "landed"] = "high_rise", # Default: high-rise
+        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # Floor level filter, applied directly on the site's server
+        is_furnished: bool = True,                        # Default: fully furnished
+        distance_to_mrt: Optional[int] = None,            # Distance to MRT in km (optional)
+        has_carpark: Optional[bool] = None,               # Car park available (optional)
+        is_verified_agent: bool = True,                   # Verified agent filter (default: True)
         page: int = 1,
         **kwargs
     ) -> Union[str, List[str]]:
         """
-        الدالة الأولى: تقوم بتوليد رابط أو روابط البحث في موقع iProperty بناءً على الفلاتر المحددة.
-        تدعم أي توليفة من أنواع السكن (مثل: medium + master, small + master, إلخ)،
-        وفلتر مستوى الطابق (floor_level) على سيرفر الموقع مباشرة.
+        Function 1: build the search URL(s) for iProperty from the given filters.
+        Supports any combination of housing types (e.g. medium + master, small + master, etc.),
+        and the floor level filter (floor_level), applied directly on the site's server.
         """
         base_url = "https://www.iproperty.com.my/property-for-rent"
 
@@ -279,12 +279,12 @@ class IProperties:
                 "maxPrice": max_price,
             }
 
-            # فلتر الوكيل الموثق (الافتراضي True، وعند إيقافه False لا يتم تقييد البحث)
+            # Verified agent filter (True by default; when False the search is not restricted)
             verified = kwargs.get("verified_agent", is_verified_agent)
             if verified:
                 params["isListerVerified"] = "true"
 
-            # هيكل العقار
+            # Property structure
             if property_structure == "high_rise":
                 params["propertyTypeGroup"] = "N"
                 params["propertyTypeCode"] = "CONDO,APT,SRES,STUDIO"
@@ -292,11 +292,11 @@ class IProperties:
                 params["propertyTypeGroup"] = "L"
                 params["propertyTypeCode"] = "TERRACE,SEMI_D,BUNGALOW"
 
-            # مستوى الطابق على سيرفر الموقع (HIGH, PENT, MID, LOW)
+            # Floor level, applied on the site's server (HIGH, PENT, MID, LOW)
             if floor_level is not None:
                 params["floorLevel"] = floor_level
 
-            # نوع السكن والغرف
+            # Housing and room type
             if h_type == "studio":
                 params["bedrooms"] = "-1"
             elif h_type == "master_room":
@@ -313,11 +313,11 @@ class IProperties:
                 if bedrooms is not None:
                     params["bedrooms"] = str(bedrooms)
 
-            # الفرش
+            # Furnishing
             if is_furnished:
                 params["furnishing"] = "FULL"
 
-            # الحقول الاختيارية
+            # Optional fields
             if min_price is not None:
                 params["minPrice"] = min_price
 
@@ -332,7 +332,7 @@ class IProperties:
 
             return f"{base_url}?{urlencode(params)}"
 
-        # التوافق مع الكود القديم عند استخدام housing_type="room"
+        # Backward compatibility with old code that passes housing_type="room"
         if housing_type == "room":
             if room_type == "master":
                 housing_type = "master_room"
@@ -346,14 +346,14 @@ class IProperties:
         selected_types = normalize_housing_types(housing_type)
         urls = [_build_params_for_type(t) for t in selected_types]
 
-        # إذا كان الطلب نوعاً مفرداً كنص أصلي نرجع رابطاً واحداً، وإلا نرجع قائمة روابط
+        # A single type passed as a plain string returns one URL; otherwise return a list of URLs
         if isinstance(housing_type, str) and len(urls) == 1 and housing_type != "studio_or_master_room":
             return urls[0]
         return urls
 
     def scrape_to_json(self, url: Union[str, List[str]], output_file: str = "properties.json") -> List[Dict[str, Any]]:
         """
-        الدالة الثانية: تأخذ رابطاً واحداً أو قائمة روابط، تحمّلها كلها في نفس اللحظة، تدمجها وتفرزها من الأرخص للأغلى وتخزنها في JSON.
+        Function 2: take one URL or a list of URLs, download them all at once, merge them, sort cheapest first, and save as JSON.
         """
         urls = [url] if isinstance(url, str) else list(url)
         pages = fetch_all([(u, self.headers) for u in urls])
@@ -361,11 +361,11 @@ class IProperties:
 
     def get_property_details(self, property_url: str, output_file: Optional[str] = None) -> Dict[str, Any]:
         """
-        الدالة الثالثة: تأخذ رابط العقار الفردي وتستخرج تفاصيله الكاملة:
-        - الصور بجودة عالية (Images)
-        - المكان بالتفصيل (Detailed Location)
-        - رابط خريطة جوجل (Google Maps URL)
-        - قاموس تفاصيل العقار المستقل (Property Details)
+        Function 3: take a single listing URL and extract its full details:
+        - High-resolution images
+        - Detailed location
+        - Google Maps URL
+        - Separate property details dictionary
         """
         response = self.session.get(property_url, headers=self.headers)
         
@@ -394,11 +394,11 @@ class IProperties:
         pdata = raw_json.get("props", {}).get("pageProps", {}).get("pageData", {}).get("data", {})
         ld = pdata.get("listingData", {})
         
-        # 1. استخراج الصور
+        # 1. Extract images
         gallery = pdata.get("mediaGalleryData", {}).get("media", {}).get("images", {}).get("items", [])
         images = [img.get("src") for img in gallery if img.get("src")]
         
-        # 2. استخراج الموقع والخريطة
+        # 2. Extract location and map
         loc_data = pdata.get("listingLocationData", {}).get("data", {})
         detail_loc = pdata.get("listingDetail", {}).get("location", {})
         center = loc_data.get("center", {})
@@ -430,7 +430,7 @@ class IProperties:
             "map_url": map_url,
         }
         
-        # 3. استخراج تفاصيل العقار في Dictionary مستقل
+        # 3. Extract property details into a separate dictionary
         metatable = pdata.get("detailsData", {}).get("metatable", {}).get("items", [])
         raw_features = [item.get("value") for item in metatable if item.get("value")]
         
@@ -441,7 +441,7 @@ class IProperties:
         price_pretty = detail_price.get("formatted") or ld.get("pricePretty") or (f"RM {ld.get('price')}" if ld.get("price") else None)
         price_val = detail_price.get("max") or ld.get("price")
         
-        # تنظيف الوصف من وسوم HTML
+        # Strip HTML tags from the description
         raw_desc = pdata.get("descriptionBlockData", {}).get("description", "")
         clean_desc = raw_desc.replace("<br />", "\n").replace("<br>", "\n") if raw_desc else ""
         
@@ -465,7 +465,7 @@ class IProperties:
             "description": clean_desc,
         }
         
-        # تجميع الناتج النهائي
+        # Assemble the final result
         result = {
             "property_url": property_url,
             "title": ld.get("localizedTitle"),
@@ -475,11 +475,11 @@ class IProperties:
             "property_details": property_details,
         }
         
-        # حفظ الناتج في ملف JSON إذا تم تمرير مسار للملف
+        # Save the result to a JSON file if a path was given
         if output_file:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(result, f, ensure_ascii=False, indent=4)
-            # print(f"[تم بنجاح] تم حفظ تفاصيل العقار في: {output_file}")
+            # print(f"[OK] Property details saved to: {output_file}")
             
         return result
 
@@ -498,57 +498,57 @@ class Propertyguru:
 
     def generate_url(
         self,
-        location: Optional[str] = None,                   # الكلمة المفتاحية: "Kuala Lumpur", إلخ (اختياري)
-        max_price: Optional[int] = None,                  # الحد الأقصى للسعر بـ RM
-        min_price: Optional[int] = None,                  # الحد الأدنى (اختياري)
-        housing_type: Union[str, List[str]] = "studio",   # نوع أو قائمة أنواع السكن (يدعم أي توليفة)
-        room_type: Optional[str] = None,                  # (للتوافق القديم) نوع الغرفة إذا تم تمرير "room"
-        bedrooms: Optional[int] = None,                   # عدد الغرف (إذا كان entire_unit)
-        bathrooms: Optional[int] = None,                  # عدد الحمامات (اختياري)
-        property_structure: Literal["high_rise", "landed"] = "high_rise", # الافتراضي: أبراج
-        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # فلتر مستوى الطابق مباشرة على السيرفر
-        is_furnished: bool = True,                        # الافتراضي: مفروش بالكامل
-        distance_to_mrt: Optional[int] = None,            # المسافة للمترو بالكيلومتر (اختياري)
-        has_carpark: Optional[bool] = None,               # توفر موقف سيارة (اختياري)
-        is_verified_agent: bool = True,                   # فلتر الوكيل الموثق (افتراضياً: True)
+        location: Optional[str] = None,                   # Search keyword: "Kuala Lumpur", etc. (optional)
+        max_price: Optional[int] = None,                  # Maximum price in RM
+        min_price: Optional[int] = None,                  # Minimum price (optional)
+        housing_type: Union[str, List[str]] = "studio",   # Housing type or list of types (any combination is supported)
+        room_type: Optional[str] = None,                  # (Legacy) room type when housing_type="room" is passed
+        bedrooms: Optional[int] = None,                   # Number of bedrooms (when entire_unit)
+        bathrooms: Optional[int] = None,                  # Number of bathrooms (optional)
+        property_structure: Literal["high_rise", "landed"] = "high_rise", # Default: high-rise
+        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # Floor level filter, applied directly on the site's server
+        is_furnished: bool = True,                        # Default: fully furnished
+        distance_to_mrt: Optional[int] = None,            # Distance to MRT in km (optional)
+        has_carpark: Optional[bool] = None,               # Car park available (optional)
+        is_verified_agent: bool = True,                   # Verified agent filter (default: True)
         page: int = 1,
         **kwargs
     ) -> Union[str, List[str]]:
         """
-        الدالة الأولى: تقوم بتوليد رابط أو روابط البحث في موقع PropertyGuru بناءً على الفلاتر المحددة.
-        تدعم أي توليفة من أنواع السكن (مثل: medium + master, small + master, إلخ)،
-        وفلتر مستوى الطابق (floor_level) على سيرفر الموقع مباشرة.
-        الثوابت الإلزامية:
+        Function 1: build the search URL(s) for PropertyGuru from the given filters.
+        Supports any combination of housing types (e.g. medium + master, small + master, etc.),
+        and the floor level filter (floor_level), applied directly on the site's server.
+        Mandatory constants:
         - Everyone Welcome (isDiversityFriendly = true)
         - Residential Rent (isCommercial = false, listingType = rent)
-        - Verified Agent (isListerVerified = true، افتراضياً True ويمكن تعطيلها بـ False)
+        - Verified Agent (isListerVerified = true; True by default, can be disabled with False)
         """
         def _build_params_for_type(h_type: str) -> str:
             params = {
                 "listingType": "rent",
                 "page": page,
                 "isCommercial": "false",
-                "isDiversityFriendly": "true",  # Everyone Welcome - إلزامي دائماً لحماية المستخدم
+                "isDiversityFriendly": "true",  # Everyone Welcome - always mandatory, to protect the user
                 "sortBy": "price-asc",
             }
 
-            # فلتر الوكيل الموثق (الافتراضي True، وعند إيقافه False لا يتم تقييد البحث)
+            # Verified agent filter (True by default; when False the search is not restricted)
             verified = kwargs.get("verified_agent", is_verified_agent)
             if verified:
                 params["isListerVerified"] = "true"
 
-            # الموقع الجغرافي
+            # Location
             if location:
                 params["_freetextDisplay"] = location
                 params["freetext"] = location
 
-            # الأسعار
+            # Prices
             if max_price is not None:
                 params["maxPrice"] = max_price
             if min_price is not None:
                 params["minPrice"] = min_price
 
-            # هيكل العقار (أبراج كوندو افتراضياً)
+            # Property structure (high-rise condos by default)
             if property_structure == "high_rise":
                 params["propertyTypeGroup"] = "N"
                 params["propertyTypeCode"] = "CONDO,APT,SRES"
@@ -556,13 +556,13 @@ class Propertyguru:
                 params["propertyTypeGroup"] = "T,S,B"
                 params["propertyTypeCode"] = "TERRA,SEMI,BUNG"
 
-            # مستوى الطابق على سيرفر الموقع (HIGH, PENT, MID, LOW)
+            # Floor level, applied on the site's server (HIGH, PENT, MID, LOW)
             if floor_level is not None:
                 params["floorLevel"] = floor_level
 
-            # نوع السكن وعدد الغرف
+            # Housing type and number of bedrooms
             if h_type == "studio":
-                params["bedrooms"] = "0"  # في PropertyGuru كود الاستوديو هو 0
+                params["bedrooms"] = "0"  # In PropertyGuru the studio code is 0
                 params["entireUnitOrRoom"] = "ent"
             elif h_type == "master_room":
                 params["entireUnitOrRoom"] = "room"
@@ -578,11 +578,11 @@ class Propertyguru:
                 if bedrooms is not None:
                     params["bedrooms"] = str(bedrooms)
 
-            # الفرش
+            # Furnishing
             if is_furnished:
                 params["furnishing"] = "FULL"
 
-            # الحقول الاختيارية
+            # Optional fields
             if bathrooms is not None:
                 params["bathrooms"] = str(bathrooms)
 
@@ -594,7 +594,7 @@ class Propertyguru:
 
             return f"{self.base_url}?{urlencode(params)}"
 
-        # التوافق مع الكود القديم عند استخدام housing_type="room"
+        # Backward compatibility with old code that passes housing_type="room"
         if housing_type == "room":
             if room_type == "master":
                 housing_type = "master_room"
@@ -608,14 +608,14 @@ class Propertyguru:
         selected_types = normalize_housing_types(housing_type)
         urls = [_build_params_for_type(t) for t in selected_types]
 
-        # إذا كان الطلب نوعاً مفرداً كنص أصلي نرجع رابطاً واحداً، وإلا نرجع قائمة روابط
+        # A single type passed as a plain string returns one URL; otherwise return a list of URLs
         if isinstance(housing_type, str) and len(urls) == 1 and housing_type != "studio_or_master_room":
             return urls[0]
         return urls
 
     def scrape_to_json(self, url: Union[str, List[str]], output_file: str = "propertyguru_properties.json") -> List[Dict[str, Any]]:
         """
-        الدالة الثانية: تأخذ رابطاً أو قائمة روابط من PropertyGuru، تحمّلها كلها في نفس اللحظة، تدمجها وترتبها من الأرخص للأغلى.
+        Function 2: take a URL or list of URLs from PropertyGuru, download them all at once, merge them, and sort cheapest first.
         """
         urls = [url] if isinstance(url, str) else list(url)
         pages = fetch_all([(u, self.headers) for u in urls])
@@ -623,7 +623,7 @@ class Propertyguru:
 
     def get_property_details(self, property_url: str, output_file: Optional[str] = None) -> Dict[str, Any]:
         """
-        الدالة الثالثة: تأخذ رابط عقار فردي من PropertyGuru وتستخرج تفاصيله الكاملة.
+        Function 3: take a single PropertyGuru listing URL and extract its full details.
         """
         response = self.session.get(property_url, headers=self.headers)
         
@@ -652,11 +652,11 @@ class Propertyguru:
         pdata = raw_json.get("props", {}).get("pageProps", {}).get("pageData", {}).get("data", {})
         ld = pdata.get("listingData", {})
         
-        # 1. الصور
+        # 1. Images
         gallery = pdata.get("mediaGalleryData", {}).get("media", {}).get("images", {}).get("items", [])
         images = [img.get("src") for img in gallery if img.get("src")]
         
-        # 2. الموقع والخريطة
+        # 2. Location and map
         loc_data = pdata.get("listingLocationData", {}).get("data", {})
         detail_loc = pdata.get("listingDetail", {}).get("location", {})
         center = loc_data.get("center", {})
@@ -688,7 +688,7 @@ class Propertyguru:
             "map_url": map_url,
         }
         
-        # 3. تفاصيل العقار في Dictionary مستقل
+        # 3. Property details in a separate dictionary
         metatable = pdata.get("detailsData", {}).get("metatable", {}).get("items", [])
         raw_features = [item.get("value") for item in metatable if item.get("value")]
         
@@ -734,12 +734,12 @@ class Propertyguru:
         if output_file:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(result, f, ensure_ascii=False, indent=4)
-            # print(f"[تم بنجاح] تم حفظ تفاصيل عقار PropertyGuru في: {output_file}")
+            # print(f"[OK] PropertyGuru property details saved to: {output_file}")
             
         return result
 
 class Speedhome:
-    # أنواع الغرف في SPEEDHOME مقابل أنواع السكن الموحدة عندنا
+    # SPEEDHOME room types mapped to our unified housing types
     ROOM_TYPE_CODES = {
         "master_room": "MASTER",
         "medium_room": "MEDIUM",
@@ -761,53 +761,53 @@ class Speedhome:
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://speedhome.com/",
         }
-        # صفحة البحث الأساسية، والموقع يُمرَّر كنص حر عبر q (يغطي كل ماليزيا وليس كوالالمبور فقط)
+        # Base search page; the location is passed as free text via q (covers all of Malaysia, not only Kuala Lumpur)
         self.base_url = "https://speedhome.com/rent/kuala-lumpur"
 
     def generate_url(
         self,
-        location: Optional[str] = None,                   # الكلمة المفتاحية: "Setapak", "M Vertica", إلخ
-        max_price: Optional[int] = None,                  # الحد الأقصى للسعر بـ RM
-        min_price: Optional[int] = None,                  # الحد الأدنى (اختياري)
-        housing_type: Union[str, List[str]] = "studio",   # نوع أو قائمة أنواع السكن (يدعم أي توليفة)
-        room_type: Optional[str] = None,                  # (للتوافق القديم) نوع الغرفة إذا تم تمرير "room"
-        bedrooms: Optional[int] = None,                   # عدد الغرف (إذا كان entire_unit)
-        bathrooms: Optional[int] = None,                  # عدد الحمامات (اختياري)
-        property_structure: Literal["high_rise", "landed"] = "high_rise", # الافتراضي: أبراج
-        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # غير مدعوم في SPEEDHOME (يتم تجاهله)
-        is_furnished: bool = True,                        # الافتراضي: مفروش بالكامل
-        distance_to_mrt: Optional[int] = None,            # غير مدعوم في SPEEDHOME (يتم تجاهله)
-        has_carpark: Optional[bool] = None,               # توفر موقف سيارة (اختياري)
-        is_verified_agent: bool = True,                   # فلتر المالك الموثق (افتراضياً: True)
+        location: Optional[str] = None,                   # Search keyword: "Setapak", "M Vertica", etc.
+        max_price: Optional[int] = None,                  # Maximum price in RM
+        min_price: Optional[int] = None,                  # Minimum price (optional)
+        housing_type: Union[str, List[str]] = "studio",   # Housing type or list of types (any combination is supported)
+        room_type: Optional[str] = None,                  # (Legacy) room type when housing_type="room" is passed
+        bedrooms: Optional[int] = None,                   # Number of bedrooms (when entire_unit)
+        bathrooms: Optional[int] = None,                  # Number of bathrooms (optional)
+        property_structure: Literal["high_rise", "landed"] = "high_rise", # Default: high-rise
+        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # Not supported by SPEEDHOME (ignored)
+        is_furnished: bool = True,                        # Default: fully furnished
+        distance_to_mrt: Optional[int] = None,            # Not supported by SPEEDHOME (ignored)
+        has_carpark: Optional[bool] = None,               # Car park available (optional)
+        is_verified_agent: bool = True,                   # Verified owner filter (default: True)
         page: int = 1,
         **kwargs
     ) -> Union[str, List[str]]:
         """
-        الدالة الأولى: تقوم بتوليد رابط أو روابط البحث في موقع SPEEDHOME بناءً على الفلاتر المحددة.
-        الفلاتر التي يدعمها السيرفر توضع في الرابط (q, min, max, type, furnish, bed, bath, carpark, allRaces, page).
-        الفلاتر التي لا يدعمها السيرفر (استوديو، نوع الغرفة، العدد الدقيق للغرف والحمامات، المالك الموثق)
-        توضع بعد علامة # في الرابط، فلا تُرسل للموقع، وتطبقها الدالة الثانية على النتائج محلياً.
+        Function 1: build the search URL(s) for SPEEDHOME from the given filters.
+        Filters the server supports go in the URL query (q, min, max, type, furnish, bed, bath, carpark, allRaces, page).
+        Filters the server does not support (studio, room type, exact bedroom and bathroom count, verified owner)
+        go after the # in the URL, so they are not sent to the site; function 2 applies them locally to the results.
         """
         def _build_params_for_type(h_type: str) -> str:
             params = {}
 
-            # الموقع الجغرافي كنص حر
+            # Location as free text
             if location:
                 params["q"] = location
 
-            # الأسعار
+            # Prices
             if max_price is not None:
                 params["max"] = max_price
             if min_price is not None:
                 params["min"] = min_price
 
-            # Everyone Welcome - إلزامي دائماً لحماية المستخدم
+            # Everyone Welcome - always mandatory, to protect the user
             params["allRaces"] = 1
 
-            # فلاتر محلية تُطبق بعد السحب
+            # Local filters, applied after scraping
             local_filters = {}
 
-            # نوع السكن
+            # Housing type
             if h_type == "studio":
                 params["type"] = "HIGHRISE"
                 local_filters["bedrooms"] = 0
@@ -817,16 +817,16 @@ class Speedhome:
             elif h_type == "entire_unit":
                 params["type"] = "HIGHRISE" if property_structure == "high_rise" else "LANDED"
                 if bedrooms is not None:
-                    params["bed"] = bedrooms  # السيرفر يرجع "على الأقل" هذا العدد
+                    params["bed"] = bedrooms  # The server returns "at least" this many
                     local_filters["bedrooms"] = bedrooms
 
-            # الفرش
+            # Furnishing
             if is_furnished:
                 params["furnish"] = 2
 
-            # الحقول الاختيارية
+            # Optional fields
             if bathrooms is not None:
-                params["bath"] = bathrooms  # السيرفر يرجع "على الأقل" هذا العدد
+                params["bath"] = bathrooms  # The server returns "at least" this many
                 if h_type not in self.ROOM_TYPE_CODES:
                     local_filters["bathrooms"] = bathrooms
 
@@ -835,7 +835,7 @@ class Speedhome:
 
             params["page"] = page
 
-            # فلتر المالك الموثق (الافتراضي True، وعند إيقافه False لا يتم تقييد البحث)
+            # Verified owner filter (True by default; when False the search is not restricted)
             verified = kwargs.get("verified_agent", is_verified_agent)
             if verified:
                 local_filters["verified"] = 1
@@ -845,7 +845,7 @@ class Speedhome:
                 url += f"#{urlencode(local_filters)}"
             return url
 
-        # التوافق مع الكود القديم عند استخدام housing_type="room"
+        # Backward compatibility with old code that passes housing_type="room"
         if housing_type == "room":
             if room_type == "master":
                 housing_type = "master_room"
@@ -859,14 +859,14 @@ class Speedhome:
         selected_types = normalize_housing_types(housing_type)
         urls = [_build_params_for_type(t) for t in selected_types]
 
-        # إذا كان الطلب نوعاً مفرداً كنص أصلي نرجع رابطاً واحداً، وإلا نرجع قائمة روابط
+        # A single type passed as a plain string returns one URL; otherwise return a list of URLs
         if isinstance(housing_type, str) and len(urls) == 1 and housing_type != "studio_or_master_room":
             return urls[0]
         return urls
 
     @staticmethod
     def _passes_local_filters(item: Dict[str, Any], local_filters: Dict[str, str]) -> bool:
-        """تطبيق الفلاتر التي لا يدعمها سيرفر SPEEDHOME على عقار واحد."""
+        """Apply the filters that SPEEDHOME's server does not support to a single listing."""
         if "bedrooms" in local_filters and item.get("bedroom") != int(local_filters["bedrooms"]):
             return False
         if "bathrooms" in local_filters and item.get("bathroom") != int(local_filters["bathrooms"]):
@@ -885,13 +885,13 @@ class Speedhome:
 
     def scrape_to_json(self, url: Union[str, List[str]], output_file: str = "speedhome_properties.json") -> List[Dict[str, Any]]:
         """
-        الدالة الثانية: تأخذ رابطاً أو قائمة روابط من SPEEDHOME، تحمّلها كلها في نفس اللحظة،
-        تطبق الفلاتر المحلية، وتدمج العقارات وترتبها من الأرخص للأغلى بنفس هيكلية المنصات الأخرى.
+        Function 2: take a URL or list of URLs from SPEEDHOME, download them all at once,
+        apply the local filters, then merge the listings and sort them cheapest first, in the same structure as the other platforms.
         """
         from urllib.parse import parse_qs
 
         urls = [url] if isinstance(url, str) else list(url)
-        # فصل الفلاتر المحلية (بعد #) عن الرابط الذي يُرسل للموقع
+        # Split the local filters (after #) from the URL that is sent to the site
         split_urls = [u.split("#", 1) + [""] for u in urls]
         pages = fetch_all([(parts[0], self.headers) for parts in split_urls])
 
@@ -915,7 +915,7 @@ class Speedhome:
                 slug = item.get("slug")
                 property_url = f"{self.domain}/details/{slug}" if slug else None
 
-                # تفادي التكرار
+                # Skip duplicates
                 if property_url and property_url in seen_urls:
                     continue
                 if property_url:
@@ -927,12 +927,12 @@ class Speedhome:
                 floor_area_sqft = item.get("sqft") or None
                 floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
 
-                # الصورة المصغرة: صورة الغلاف إن وجدت، وإلا أول صورة
+                # Thumbnail: the cover photo if there is one, otherwise the first image
                 images = item.get("images") or []
                 cover = next((img for img in images if img.get("coverPhoto")), images[0] if images else {})
                 thumbnail_url = cover.get("url") or cover.get("imageUrl")
 
-                # في SPEEDHOME المعلن هو المالك نفسه وليس وكيلاً
+                # On SPEEDHOME the lister is the owner, not an agent
                 user = item.get("user") or {}
 
                 all_extracted_properties.append({
@@ -958,8 +958,8 @@ class Speedhome:
 
     def get_property_details(self, property_url: str, output_file: Optional[str] = None) -> Dict[str, Any]:
         """
-        الدالة الثالثة: تأخذ رابط عقار فردي من SPEEDHOME وتستخرج تفاصيله الكاملة
-        بنفس هيكلية المنصات الأخرى (الصور، الموقع، الخريطة، تفاصيل العقار).
+        Function 3: take a single SPEEDHOME listing URL and extract its full details,
+        in the same structure as the other platforms (images, location, map, property details).
         """
         response = self.session.get(property_url, headers=self.headers)
         raw_json = _extract_next_data(response.text)
@@ -976,14 +976,14 @@ class Speedhome:
                 "property_details": {}
             }
 
-        # 1. الصور بجودة عالية
+        # 1. High-resolution images
         images = [
             (img.get("url") or img.get("imageUrl")).replace("-medium.", "-large.")
             for img in info.get("images") or []
             if img.get("url") or img.get("imageUrl")
         ]
 
-        # 2. الموقع والخريطة
+        # 2. Location and map
         lat = info.get("latitude")
         lng = info.get("longitude")
         map_url = f"https://www.google.com/maps?q={lat},{lng}" if (lat and lng) else None
@@ -1002,7 +1002,7 @@ class Speedhome:
             "map_url": map_url,
         }
 
-        # 3. تفاصيل العقار في Dictionary مستقل
+        # 3. Property details in a separate dictionary
         floor_area_sqft = info.get("sqft") or None
         floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
 
@@ -1013,7 +1013,7 @@ class Speedhome:
         if property_type == "ROOM" and info.get("roomType"):
             property_type = f"ROOM ({info.get('roomType')})"
 
-        # المميزات: مرافق المبنى + أثاث الوحدة بصيغة مقروءة
+        # Highlights: building facilities + unit furnishings, in readable form
         highlights = [
             str(f).replace("_", " ").title()
             for f in (info.get("facilities") or []) + (info.get("furnishes") or [])
@@ -1065,25 +1065,25 @@ class Mudah:
 
     def generate_url(
         self,
-        location: str,                                    # الكلمة المفتاحية: "Kuala Lumpur", "Cyberjaya", إلخ
-        max_price: int,                                   # الحد الأقصى للسعر بـ RM
-        min_price: Optional[int] = None,                  # الحد الأدنى (اختياري)
-        housing_type: Union[str, List[str]] = "studio",   # نوع أو قائمة أنواع السكن (يدعم أي توليفة)
-        room_type: Optional[str] = None,                  # (للتوافق القديم) نوع الغرفة إذا تم تمرير "room"
-        bedrooms: Optional[int] = None,                   # عدد الغرف (إذا كان entire_unit)
-        bathrooms: Optional[int] = None,                  # عدد الحمامات (اختياري)
-        property_structure: Literal["high_rise", "landed"] = "high_rise", # الافتراضي: أبراج
-        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # مستوى الطابق
-        is_furnished: bool = True,                        # الافتراضي: مفروش بالكامل
-        distance_to_mrt: Optional[int] = None,            # المسافة للمترو بالكيلومتر (غير مدعوم مباشرة في Mudah)
-        has_carpark: Optional[bool] = None,               # توفر موقف سيارة (اختياري)
-        is_verified_agent: bool = True,                   # فلتر الوكيل الموثق (افتراضياً: True)
+        location: str,                                    # Search keyword: "Kuala Lumpur", "Cyberjaya", etc.
+        max_price: int,                                   # Maximum price in RM
+        min_price: Optional[int] = None,                  # Minimum price (optional)
+        housing_type: Union[str, List[str]] = "studio",   # Housing type or list of types (any combination is supported)
+        room_type: Optional[str] = None,                  # (Legacy) room type when housing_type="room" is passed
+        bedrooms: Optional[int] = None,                   # Number of bedrooms (when entire_unit)
+        bathrooms: Optional[int] = None,                  # Number of bathrooms (optional)
+        property_structure: Literal["high_rise", "landed"] = "high_rise", # Default: high-rise
+        floor_level: Optional[Literal["HIGH", "MID", "LOW", "PENT"]] = None, # Floor level
+        is_furnished: bool = True,                        # Default: fully furnished
+        distance_to_mrt: Optional[int] = None,            # Distance to MRT in km (not directly supported by Mudah)
+        has_carpark: Optional[bool] = None,               # Car park available (optional)
+        is_verified_agent: bool = True,                   # Verified agent filter (default: True)
         page: int = 1,
         **kwargs
     ) -> Union[str, List[str]]:
         """
-        الدالة الأولى: تقوم بتوليد رابط أو روابط البحث في موقع Mudah بناءً على الفلاتر المحددة.
-        تدعم أي توليفة من أنواع السكن، الأسعار، مستوى الطابق، توثيق الوكيل، والفرش.
+        Function 1: build the search URL(s) for Mudah from the given filters.
+        Supports any combination of housing types, prices, floor level, agent verification, and furnishing.
         """
         def _build_params_for_type(h_type: str) -> str:
             params = {
@@ -1096,7 +1096,7 @@ class Mudah:
             if min_price is not None:
                 local_filters["min_price"] = str(min_price)
 
-            # فلتر نطاق السعر في سيرفر Mudah
+            # Price range filter on Mudah's server
             if max_price is not None and min_price is not None:
                 params["monthly_rent"] = f"{min_price}-{max_price}"
             elif max_price is not None:
@@ -1104,7 +1104,7 @@ class Mudah:
             elif min_price is not None:
                 params["monthly_rent"] = f"{min_price}-"
 
-            # تصنيف ونوع السكن والكلمات المفتاحية من المدخلات مباشرة
+            # Category, housing type, and keywords, taken directly from the inputs
             q_keywords = []
             if location:
                 q_keywords.append(location.strip())
@@ -1137,12 +1137,12 @@ class Mudah:
             if q_keywords:
                 params["q"] = " ".join(q_keywords)
 
-            # الفرش (1 = Fully Furnished)
+            # Furnishing (1 = Fully Furnished)
             if is_furnished:
                 params["furnished_id"] = 1
                 local_filters["is_furnished"] = "1"
 
-            # مستوى الطابق (HIGH=1, MID=2, LOW=3)
+            # Floor level (HIGH=1, MID=2, LOW=3)
             if floor_level == "HIGH":
                 params["floor_range_id"] = 1
             elif floor_level == "MID":
@@ -1150,23 +1150,23 @@ class Mudah:
             elif floor_level == "LOW":
                 params["floor_range_id"] = 3
 
-            # الحمامات
+            # Bathrooms
             if bathrooms is not None:
                 params["bathroom_id"] = bathrooms
                 local_filters["bathrooms"] = str(bathrooms)
 
-            # موقف سيارة
+            # Car park
             if has_carpark is True:
                 params["parking_id"] = 1
                 local_filters["has_carpark"] = "1"
 
-            # فلتر الوكيل / الشركة الموثقة
+            # Verified agent / company filter
             verified = kwargs.get("verified_agent", is_verified_agent)
             if verified:
                 params["f"] = "c"
                 local_filters["verified"] = "1"
 
-            # الصفحة
+            # Page
             if page > 1:
                 params["o"] = page
 
@@ -1177,7 +1177,7 @@ class Mudah:
                 url += f"#{urlencode(local_filters)}"
             return url
 
-        # التوافق مع الكود القديم عند استخدام housing_type="room"
+        # Backward compatibility with old code that passes housing_type="room"
         if housing_type == "room":
             if room_type == "master":
                 housing_type = "master_room"
@@ -1197,7 +1197,7 @@ class Mudah:
 
     @staticmethod
     def _passes_local_filters(item: Dict[str, Any], local_filters: Dict[str, str]) -> bool:
-        """تطبيق الفلاتر المحلية على عقار واحد للتأكد من مطابقة جميع الشروط بنسبة 100%."""
+        """Apply the local filters to a single listing, to make sure it matches every condition exactly."""
         if "max_price" in local_filters:
             price_val = _get_numeric_price(item.get("price"))
             if price_val > float(local_filters["max_price"]):
@@ -1211,14 +1211,14 @@ class Mudah:
         return True
 
     def _extract_listings_from_html(self, html: Optional[str]) -> List[Dict[str, Any]]:
-        """استخراج قائمة الإعلانات من صفحة البحث في Mudah عبر RSC JSON مع خطة بديلة عبر HTML."""
+        """Extract the listings from a Mudah search page via the RSC JSON, with an HTML fallback."""
         if not html:
             return []
 
         results = []
         decoder = json.JSONDecoder()
 
-        # 1. استخراج من بيانات React Server Components (RSC)
+        # 1. Extract from the React Server Components (RSC) data
         pushes = re.findall(r'self\.__next_f\.push\(\[1,\s*\"(.*?)\"\]\)', html)
         if pushes:
             try:
@@ -1299,7 +1299,7 @@ class Mudah:
             except Exception:
                 pass
 
-        # 2. خطة بديلة (Fallback) في حال تعذر فك RSC
+        # 2. Fallback in case the RSC data cannot be decoded
         if not results:
             tree = HTMLParser(html)
             seen_hrefs = set()
@@ -1346,8 +1346,8 @@ class Mudah:
 
     def scrape_to_json(self, url: Union[str, List[str]], output_file: str = "mudah_properties.json") -> List[Dict[str, Any]]:
         """
-        الدالة الثانية: تأخذ رابطاً أو قائمة روابط من Mudah، تحمّلها وتستخرج العقارات منها،
-        تطبق الفلاتر المحلية، تدمجها وترتبها من الأرخص للأغلى وتخزنها في JSON.
+        Function 2: take a URL or list of URLs from Mudah, download them and extract the listings,
+        apply the local filters, merge, sort cheapest first, and save as JSON.
         """
         from urllib.parse import parse_qs
 
@@ -1386,11 +1386,11 @@ class Mudah:
 
     def get_property_details(self, property_url: str, output_file: Optional[str] = None) -> Dict[str, Any]:
         """
-        الدالة الثالثة: تأخذ رابط العقار الفردي من Mudah وتستخرج تفاصيله الكاملة:
-        - الصور بجودة عالية (Images)
-        - المكان بالتفصيل (Detailed Location)
-        - رابط خريطة جوجل (Google Maps URL)
-        - قاموس تفاصيل العقار المستقل (Property Details)
+        Function 3: take a single Mudah listing URL and extract its full details:
+        - High-resolution images
+        - Detailed location
+        - Google Maps URL
+        - Separate property details dictionary
         """
         response = self.session.get(property_url, headers=self.headers)
         tree = HTMLParser(response.text)
@@ -1409,7 +1409,7 @@ class Mudah:
                 pass
 
         if not attrs:
-            # محاولة قراءة JSON-LD كخطة بديلة
+            # Fall back to reading JSON-LD
             for ld_sc in tree.css('script[type="application/ld+json"]'):
                 try:
                     ld_data = json.loads(ld_sc.text())
@@ -1443,12 +1443,12 @@ class Mudah:
         params_map = {cp.get("id"): cp.get("value") for cp in cp_list if cp.get("id")}
         real_map = {cp.get("id"): cp.get("realValue") for cp in cp_list if cp.get("id")}
 
-        # 1. الصور
+        # 1. Images
         images = attrs.get("image") or []
         if isinstance(images, str):
             images = [images]
 
-        # 2. المكان والموقع
+        # 2. Place and location
         location_label = attrs.get("locationLabel") or ""
         state = attrs.get("regionName")
         city = attrs.get("subregionName")
@@ -1468,7 +1468,7 @@ class Mudah:
             "map_url": None,
         }
 
-        # 3. تفاصيل العقار في Dictionary مستقل
+        # 3. Property details in a separate dictionary
         size_raw = real_map.get("size") or params_map.get("size") or attrs.get("size") or ""
         m_size = re.search(r"\d+", str(size_raw).replace(",", ""))
         floor_area_sqft = int(m_size.group(0)) if m_size else None
@@ -1571,8 +1571,8 @@ def _save_hash_cache(path: Optional[str], cache: Dict[str, str]) -> None:
 
 def get_image_hashes(urls: List[str], cache: Dict[str, str]) -> Dict[str, Optional[str]]:
     """
-    استخراج البصمة الرقمية (MD5 Hash) لمجموعة صور في نفس اللحظة.
-    الصور الموجودة في الذاكرة لا يُعاد تحميلها، والصور الجديدة تُضاف للذاكرة.
+    Compute the digital fingerprint (MD5 hash) of a set of images concurrently.
+    Images already in the cache are not re-downloaded; new images are added to the cache.
     """
     unique_urls = list(dict.fromkeys(u for u in urls if u))
     missing = [u for u in unique_urls if u not in cache]
@@ -1587,7 +1587,7 @@ def get_image_hashes(urls: List[str], cache: Dict[str, str]) -> Dict[str, Option
 
 def extract_identifiers(item: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    استخراج رقم الإعلان التعريفي (Listing ID)، ومعرّف الصورة (Image ID)، واسم الوكيل (Agent Slug).
+    Extract the listing ID, the image ID, and the agent slug.
     """
     url = item.get("property_url") or ""
     thumb = item.get("thumbnail_url") or ""
@@ -1625,14 +1625,14 @@ def merge_and_deduplicate(
     hash_cache_file: Optional[str] = IMAGE_HASH_CACHE_FILE,
 ) -> List[Dict[str, Any]]:
     """
-    الخوارزمية الذكية ثنائية الطبقات لدمج العقارات وإلغاء التكرار مع ضمان عدم حذف أي شقة حقيقية (Zero False Positives):
-    1. المستوى الأول: المطابقة القطعية بين المنصات (Cross-Portal Match عبر Listing ID و Image ID).
-    2. المستوى الثاني: كشف إعلانات إعادة النشر لنفس الغرفة (المبنى + السعر + بصمة صورة الغرفة MD5).
-       التحسين: نجمع العقارات حسب المبنى والسعر أولاً، ونحمّل الصور فقط للمجموعات التي فيها أكثر من عقار،
-       وكلها في نفس اللحظة، مع حفظ البصمات على الجهاز. النتيجة مطابقة تماماً للخوارزمية الأصلية.
+    Smart two-tier algorithm that merges listings and removes duplicates without ever dropping a real unit (Zero False Positives):
+    1. Tier 1: exact cross-portal match (via Listing ID and Image ID).
+    2. Tier 2: detect re-posted ads for the same room (building + price + MD5 hash of the room photo).
+       Optimization: group listings by building and price first, and only download images for groups with more than one listing,
+       all at once, caching the hashes on disk. The result is identical to the original algorithm.
     """
     # -------------------------------------------------------------
-    # المستوى الأول: دمج إعلانات المنصات المشتركة (PropertyGuru و iProperty)
+    # Tier 1: merge listings shared between platforms (PropertyGuru and iProperty)
     # -------------------------------------------------------------
     tier1_merged = []
     id_map = {}
@@ -1646,7 +1646,7 @@ def merge_and_deduplicate(
                 existing = tier1_merged[id_map[key]]
                 if not existing.get("agent_name") and item.get("agent_name"):
                     existing["agent_name"] = item.get("agent_name")
-                # استكمال أي بيانات تفصيلية متوفرة في إحدى المنصات دون الأخرى
+                # Fill in any detail fields available on one platform but missing on the other
                 for f in ["floor_area_sqm", "floor_area_sqft", "nearby_transit", "is_verified_agent", "agent_name"]:
                     if existing.get(f) is None and item.get(f) is not None:
                         existing[f] = item.get(f)
@@ -1673,9 +1673,9 @@ def merge_and_deduplicate(
                     id_map[item.get("property_url")] = idx
 
     # -------------------------------------------------------------
-    # المستوى الثاني: كشف إعلانات إعادة النشر (Re-posting) لنفس الغرفة
+    # Tier 2: detect re-posted ads (Re-posting) for the same room
     # -------------------------------------------------------------
-    # 1. تجميع العقارات حسب (المبنى، السعر) بدون أي تحميل
+    # 1. Group listings by (building, price) without any downloads
     groups = defaultdict(list)
     for item in tier1_merged:
         building_key = _building_key(item)
@@ -1683,7 +1683,7 @@ def merge_and_deduplicate(
         if building_key and price < float("inf"):
             groups[(building_key, price)].append(item)
 
-    # 2. تحميل الصور فقط للمجموعات التي فيها احتمال تكرار (أكثر من عقار)
+    # 2. Download images only for groups that may contain duplicates (more than one listing)
     candidate_thumbs = [
         item.get("thumbnail_url")
         for group in groups.values() if len(group) > 1
@@ -1693,7 +1693,7 @@ def merge_and_deduplicate(
     hashes = get_image_hashes(candidate_thumbs, cache)
     _save_hash_cache(hash_cache_file, cache)
 
-    # 3. نفس منطق الإلغاء الأصلي بالترتيب الأصلي
+    # 3. Same de-duplication logic as the original, in the original order
     tier2_final = []
     seen_repost_keys = set()
 
@@ -1705,13 +1705,13 @@ def merge_and_deduplicate(
         repost_key = (building_key, price, photo_hash) if (building_key and price < float("inf") and photo_hash) else None
 
         if repost_key and repost_key in seen_repost_keys:
-            # إعلان معاد نشره لنفس الغرفة: نتجاهله
+            # Re-posted ad for the same room: skip it
             continue
         tier2_final.append(item)
         if repost_key:
             seen_repost_keys.add(repost_key)
 
-    # فرز تصاعدي دقيق لكافة العقارات من الأرخص للأغلى
+    # Final ascending sort of all listings, cheapest first
     tier2_final.sort(key=_sort_key)
 
     if output_file:
@@ -1731,14 +1731,14 @@ if __name__ == "__main__":
     ip = IProperties()
 
 
-    # 1. توليد الروابط
+    # 1. Generate the URLs
     url_one = pg.generate_url(location=location, max_price=max_price, housing_type=housing_type, floor_level=None)
     url_two = ip.generate_url(location=location, max_price=max_price, housing_type=housing_type, floor_level=None)
 
 
     total_start = time.perf_counter()
 
-    # 2. سحب الموقعين معاً في نفس اللحظة (تشغيل واحد فقط)
+    # 2. Scrape both sites together at the same time (a single run)
     t1 = time.perf_counter()
     listings_one, listings_two = scrape_sites_parallel([
         (pg, url_one, "properties.json"),
@@ -1746,7 +1746,7 @@ if __name__ == "__main__":
     ])
     print(f"Scraping both sites took: {time.perf_counter() - t1:.2f}s")
 
-    # 3. دمج النتائج وإلغاء التكرار
+    # 3. Merge the results and remove duplicates
     t2 = time.perf_counter()
     merged_results = merge_and_deduplicate(
         sources=[("PropertyGuru", listings_one), ("iProperty", listings_two)],

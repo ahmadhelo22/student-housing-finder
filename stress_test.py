@@ -1,9 +1,9 @@
 """
 stress_test.py
 =============
-سكريبت فحص الضغط والتحمل الواقعي بنسبة 100% (Real-World Stress Benchmark).
-يحاكي سلوك 9 مستخدمين حقيقيين يرسلون طلباتهم إلى سيرفرات PropertyGuru و iProperty في نفس اللحظة.
-لا يحتوي على أي بيانات وهمية (Mocking)، ولا يستعمل أي اختصارات أو كاش يخفف العبء عن Scrapper_2.
+Real-world stress and load benchmark (Real-World Stress Benchmark).
+Simulates 9 real users sending their requests to the PropertyGuru and iProperty servers at the same moment.
+Contains no fake data (Mocking) and uses no shortcuts or cache that would lighten the load on Scrapper_2.
 """
 
 import time
@@ -13,16 +13,16 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List
 
-# استيراد Scrapper_2 الأصلي بالكامل دون المساس به
+# Import the original Scrapper_2 as-is, without modifying it
 import Scrapper_2 as scraper
 
 
 # =====================================================================
-# 1. مستخدمو البحث الأربعة (4 Search Users) - بمناطق وفلاتر مختلفة تماماً
+# 1. The four search users (4 Search Users) - each with a completely different area and filters
 # =====================================================================
 
 def simulate_search_user_1() -> Dict[str, Any]:
-    """المستخدم 1: مستخدم يبحث عن استوديو في منطقة Mont Kiara الراقية."""
+    """User 1: searches for a studio in the upscale Mont Kiara area."""
     start_t = time.perf_counter()
     result = {
         "user_id": "Search User 1",
@@ -36,10 +36,10 @@ def simulate_search_user_1() -> Dict[str, Any]:
         "error": None,
     }
     try:
-        # جلسة متصفح جديدة ومستقلة تماماً تحاكي متصفح مستخدم حقيقي
+        # Brand-new, fully independent browser session, simulating a real user's browser
         pg = scraper.Propertyguru()
         url = pg.generate_url(location="Mont Kiara", housing_type="studio", max_price=2500)
-        # سحب حي عبر الشبكة
+        # Live scrape over the network
         listings = pg.scrape_to_json(url=url, output_file=None)
         result["items_count"] = len(listings)
         result["status"] = "PASSED" if len(listings) > 0 else "EMPTY"
@@ -53,7 +53,7 @@ def simulate_search_user_1() -> Dict[str, Any]:
 
 
 def simulate_search_user_2() -> Dict[str, Any]:
-    """المستخدم 2: مستخدم يبحث في Bangsar South عن غرفتين ويدمج الموقعين."""
+    """User 2: searches Bangsar South for two room types and merges both sites."""
     start_t = time.perf_counter()
     result = {
         "user_id": "Search User 2",
@@ -62,7 +62,7 @@ def simulate_search_user_2() -> Dict[str, Any]:
         "status": "Running",
         "elapsed_sec": 0.0,
         "items_count": 0,
-        "http_requests": 4, # 2 لـ PropertyGuru + 2 لـ iProperty
+        "http_requests": 4, # 2 for PropertyGuru + 2 for iProperty
         "summary": "",
         "error": None,
     }
@@ -74,13 +74,13 @@ def simulate_search_user_2() -> Dict[str, Any]:
         url_pg = pg.generate_url(location="Bangsar South", housing_type=housing, max_price=1600)
         url_ip = ip.generate_url(location="Bangsar South", housing_type=housing, max_price=1600)
 
-        # 4 طلبات HTTP حية متزامنة
+        # 4 concurrent live HTTP requests
         listings_pg, listings_ip = scraper.scrape_sites_parallel([
             (pg, url_pg, None),
             (ip, url_ip, None),
         ])
 
-        # دمج وإلغاء التكرار الواقعي
+        # Real merge and de-duplication
         merged = scraper.merge_and_deduplicate(
             sources=[("PropertyGuru", listings_pg), ("iProperty", listings_ip)],
             output_file=None,
@@ -97,7 +97,7 @@ def simulate_search_user_2() -> Dict[str, Any]:
 
 
 def simulate_search_user_3() -> Dict[str, Any]:
-    """المستخدم 3: بحث ضخم في Kuala Lumpur لـ 3 أنواع سكن + مطابقة بصمات الصور."""
+    """User 3: large Kuala Lumpur search for 3 housing types + image hash matching."""
     start_t = time.perf_counter()
     result = {
         "user_id": "Search User 3",
@@ -106,7 +106,7 @@ def simulate_search_user_3() -> Dict[str, Any]:
         "status": "Running",
         "elapsed_sec": 0.0,
         "items_count": 0,
-        "http_requests": 6, # 3 لـ PropertyGuru + 3 لـ iProperty
+        "http_requests": 6, # 3 for PropertyGuru + 3 for iProperty
         "summary": "",
         "error": None,
     }
@@ -118,13 +118,13 @@ def simulate_search_user_3() -> Dict[str, Any]:
         url_pg = pg.generate_url(location="Kuala", housing_type=housing, max_price=1000)
         url_ip = ip.generate_url(location="Kuala", housing_type=housing, max_price=1000)
 
-        # 6 طلبات HTTP حية متزامنة
+        # 6 concurrent live HTTP requests
         listings_pg, listings_ip = scraper.scrape_sites_parallel([
             (pg, url_pg, None),
             (ip, url_ip, None),
         ])
 
-        # تشغيل خوارزمية الدمج ثنائية الطبقات بالكامل
+        # Run the full two-tier merge algorithm
         merged = scraper.merge_and_deduplicate(
             sources=[("PropertyGuru", listings_pg), ("iProperty", listings_ip)],
             output_file=None,
@@ -141,7 +141,7 @@ def simulate_search_user_3() -> Dict[str, Any]:
 
 
 def simulate_search_user_4() -> Dict[str, Any]:
-    """المستخدم 4: مستخدم يبحث عن استوديو في Cheras."""
+    """User 4: searches for a studio in Cheras."""
     start_t = time.perf_counter()
     result = {
         "user_id": "Search User 4",
@@ -170,11 +170,11 @@ def simulate_search_user_4() -> Dict[str, Any]:
 
 
 # =====================================================================
-# 2. مستخدمو التفاصيل الخمسة (5 Property Details Users)
+# 2. The five property details users (5 Property Details Users)
 # =====================================================================
 
 def extract_sample_urls_from_merged(count: int = 5) -> List[Dict[str, str]]:
-    """استخراج 5 روابط لعقارات مختلفة من ملف merged_properties.json."""
+    """Extract 5 URLs of different listings from merged_properties.json."""
     json_path = "merged_properties.json"
     if not os.path.exists(json_path):
         raise FileNotFoundError(f"ملف {json_path} غير موجود. يرجى التأكد من تشغيل السكرابر.")
@@ -195,7 +195,7 @@ def extract_sample_urls_from_merged(count: int = 5) -> List[Dict[str, str]]:
 
 
 def simulate_detail_user(user_index: int, target_info: Dict[str, str]) -> Dict[str, Any]:
-    """مستخدم يطلب تفاصيل صفحة عقار فردي محدد بالكامل (get_property_details)."""
+    """A user requesting the full details page of one specific listing (get_property_details)."""
     start_t = time.perf_counter()
     prop_url = target_info["url"]
     initial_title = target_info.get("title", "Property")
@@ -212,13 +212,13 @@ def simulate_detail_user(user_index: int, target_info: Dict[str, str]) -> Dict[s
         "error": None,
     }
     try:
-        # جلسة متصفح جديدة بالكامل
+        # Brand-new browser session
         if "iproperty.com.my" in prop_url:
             client = scraper.IProperties()
         else:
             client = scraper.Propertyguru()
 
-        # طلب HTTP كامل لصفحة العقار وتحليل كامل وسوم الـ HTML والمواصفات
+        # Full HTTP request for the listing page, with full parsing of its HTML tags and specs
         details = client.get_property_details(prop_url, output_file=None)
         if details and details.get("title"):
             p_details = details.get("property_details", {})
@@ -239,7 +239,7 @@ def simulate_detail_user(user_index: int, target_info: Dict[str, str]) -> Dict[s
 
 
 # =====================================================================
-# 3. مشغل الاختبار المتزامن الكامل (9 Concurrent Users)
+# 3. The full concurrent test runner (9 Concurrent Users)
 # =====================================================================
 
 def run_stress_test_9_users():
@@ -247,7 +247,7 @@ def run_stress_test_9_users():
     print("🔍 فحص التحمل الواقعي 100%: 9 مستخدمين يرسلون طلبات حية متزامنة عبر الإنترنت")
     print("=" * 90)
 
-    # استخراج 5 روابط لعقارات مختلفة
+    # Extract 5 URLs of different listings
     sample_targets = extract_sample_urls_from_merged(count=5)
     print(f"✓ تم استخراج 5 روابط لعقارات حقيقية من merged_properties.json لاختبار صفحات التفاصيل.")
 
@@ -295,7 +295,7 @@ def run_stress_test_9_users():
 
     total_elapsed = round(time.perf_counter() - total_start, 2)
 
-    # فرز النتائج: البحث أولاً ثم التفاصيل
+    # Sort the results: search users first, then details users
     results.sort(key=lambda r: (0 if "Search" in r["user_id"] else 1, r["user_id"]))
 
     print("\n" + "=" * 90)

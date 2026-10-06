@@ -6,7 +6,7 @@ __pycache__/
 # macOS
 .DS_Store
 
-# ملفات الناتج والذاكرة التي تُنشأ عند التشغيل
+# Output files and caches generated at runtime
 *.json
 
 # Images (not uploaded)
