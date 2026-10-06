@@ -20,8 +20,12 @@ SEARCH_INPUT = {
     "has_carpark": None,               # True | None
     "is_verified_agent": True,         # True | False
     "page": 1,                         # int
+    "specific_location": None,         # dict | None: {"latitude": float, "longitude": float, "radius_km": float = 5}
 }
 ```
+
+`specific_location` is not sent to the sites. When set, OUTPUT 1 is passed through
+`location_filter.filter_by_distance(listings, specific_location)` (see OUTPUT 1B).
 
 `housing_type` accepted aliases:
 
@@ -54,6 +58,28 @@ SEARCH_INPUT = {
     },
 ]
 ```
+
+## OUTPUT 1B — Search results near `specific_location`
+
+`list[dict]` — same fields as OUTPUT 1, only listings within `radius_km` of the point,
+sorted by price ascending (or by distance with `sort_by="distance"`).
+
+```python
+[
+    {
+        # ...all OUTPUT 1 fields...
+        "coordinates": {"latitude": float, "longitude": float},
+        "distance_km": float,          # straight-line (haversine) distance, 2 decimals
+    },
+]
+```
+
+Where each listing's coordinates come from:
+
+| Platform | Source |
+|---|---|
+| PropertyGuru, iProperty, SPEEDHOME | detail page (one extra request per listing, cached in `coordinates_cache.json`) |
+| Mudah | not available — dropped (or kept with `distance_km: None` when `keep_unknown=True`) |
 
 ## INPUT 2 — Property detail
 
