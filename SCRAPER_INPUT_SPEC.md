@@ -6,7 +6,7 @@ Defaults are applied when the user does not mention the field. `None` = no filte
 
 ```python
 SEARCH_INPUT = {
-    "location": None,                  # str  (required)
+    "area": None,                      # str  (required) area name the sites search in, e.g. "Kuala Lumpur", "Melaka"
     "max_price": None,                 # int  RM/month (required)
     "min_price": None,                 # int  RM/month | None
     "housing_type": "studio",          # str | list[str]: "studio", "master_room", "medium_room", "small_room", "entire_unit", "studio_or_master_room"
@@ -20,15 +20,19 @@ SEARCH_INPUT = {
     "has_carpark": None,               # True | None
     "is_verified_agent": True,         # True | False
     "page": 1,                         # int
-    "specific_location": None,         # dict | None: {"latitude": float, "longitude": float, "radius_km": float = 5}
+    "location": None,                  # dict | None: target point {"latitude": float, "longitude": float, "radius_km": float = 5}
 }
 ```
 
 Run a search with `search_pipeline.search(SEARCH_INPUT)` — the single entry point:
-it scrapes all platforms at once, filters by distance when `specific_location` is set,
-then merges and removes duplicates. Returns OUTPUT 1, or OUTPUT 1B when `specific_location` is set.
 
-`specific_location` is not sent to the sites; it is applied by `location_filter` (see OUTPUT 1B).
+1. Scrape all platforms at once, searching by `area`.
+2. Merge, remove duplicates, and save to `merged_properties.json` (OUTPUT 1).
+3. If `location` is set: read that file, keep only listings within `radius_km` of the point,
+   and save them to `nearby_properties.json` (OUTPUT 1B) — the file given to the user.
+
+`location` is not sent to the sites; it is applied by `location_filter`.
+`area` is passed to each platform's `generate_url(location=...)`.
 
 `housing_type` accepted aliases:
 
@@ -64,7 +68,7 @@ then merges and removes duplicates. Returns OUTPUT 1, or OUTPUT 1B when `specifi
 ]
 ```
 
-## OUTPUT 1B — Search results near `specific_location`
+## OUTPUT 1B — Search results near `location`
 
 `list[dict]` — same fields as OUTPUT 1, only listings within `radius_km` of the point,
 sorted by price ascending (or by distance with `sort_by="distance"`).

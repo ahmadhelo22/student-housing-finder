@@ -3,20 +3,25 @@ search_pipeline.py
 ==================
 Single entry point of the project: takes SEARCH_INPUT (INPUT 1) and returns the final listings.
 
-Steps:
-1. Scrape all platforms at the same time (Scrapper_2).
-2. If specific_location is set: keep only the listings within its radius (location_filter).
-   Filtering runs BEFORE merging, so merge_and_deduplicate never downloads photos of far-away listings.
-3. Merge the platforms and remove duplicates (merge_and_deduplicate).
+Workflow:
+1. Scrape all platforms at the same time, using the `area` name (e.g. "Kuala Lumpur").
+2. Merge the platforms, remove duplicates, and save everything to SCRAPED_FILE (OUTPUT 1).
+3. If `location` is set: read SCRAPED_FILE, keep only the listings within radius_km of the point
+   (building by building, see location_filter), and save them to OUTPUT_FILE (OUTPUT 1B).
 """
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Literal, List, Dict, Any, Callable
+from typing import Literal, List, Dict, Any, Callable
 
 import Scrapper_2 as scraper
 import location_filter
+
+
+# All search results (scraper output)
+SCRAPED_FILE = "merged_properties.json"
+# Listings near `location` (filter output, given to the user)
+OUTPUT_FILE = "nearby_properties.json"
 
 
 def _safe(platform_name: str, task: Callable[[], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -28,8 +33,8 @@ def _safe(platform_name: str, task: Callable[[], List[Dict[str, Any]]]) -> List[
         return []
 
 
-def _scrape_all(params: Dict[str, Any], include_mudah: bool) -> List[Dict[str, Any]]:
-    """Scrape every platform at the same time and return all their listings in one list."""
+def _scrape_all(params: Dict[str, Any], include_mudah: bool) -> List[List[Dict[str, Any]]]:
+    """Scrape every platform at the same time and return one list of listings per platform."""
     pg, ip, sh = scraper.Propertyguru(), scraper.IProperties(), scraper.Speedhome()
 
     def scrape_pg_ip() -> List[Dict[str, Any]]:
@@ -50,50 +55,46 @@ def _scrape_all(params: Dict[str, Any], include_mudah: bool) -> List[Dict[str, A
         tasks.append(("Mudah", lambda: md.scrape_to_json(md.generate_url(**params), output_file=None)))
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        results = list(pool.map(lambda t: _safe(*t), tasks))
-    return [item for listings in results for item in listings]
+        return list(pool.map(lambda t: _safe(*t), tasks))
 
 
 def search(
     search_input: Dict[str, Any],
     sort_by: Literal["price", "distance"] = "price",
     keep_unknown: bool = False,
-    output_file: Optional[str] = None,
+    scraped_file: str = SCRAPED_FILE,
+    output_file: str = OUTPUT_FILE,
 ) -> List[Dict[str, Any]]:
     """
     Run a full search from SEARCH_INPUT.
-    - Without specific_location: returns OUTPUT 1 (all platforms merged, cheapest first).
-    - With specific_location: returns OUTPUT 1B (only listings within radius_km, plus coordinates and distance_km).
-      sort_by and keep_unknown only apply in this case (see location_filter.filter_by_distance).
+    - Without `location`: returns OUTPUT 1 (all platforms merged, cheapest first), saved in scraped_file.
+    - With `location`: returns OUTPUT 1B (only listings within radius_km, plus coordinates and distance_km),
+      saved in output_file. sort_by and keep_unknown only apply in this case (see location_filter.filter_by_distance).
     """
-    if not search_input.get("location") or search_input.get("max_price") is None:
-        raise ValueError("location و max_price مطلوبان في SEARCH_INPUT")
+    if not search_input.get("area") or search_input.get("max_price") is None:
+        raise ValueError("area و max_price مطلوبان في SEARCH_INPUT")
 
-    specific_location = search_input.get("specific_location")
-    if specific_location is not None:
+    location = search_input.get("location")
+    if location is not None:
         # Fail fast, before sending any request
-        location_filter.parse_specific_location(specific_location)
+        location_filter.parse_location(location)
 
-    # None means "not mentioned": drop it so each generate_url applies its own default
-    params = {k: v for k, v in search_input.items() if k != "specific_location" and v is not None}
+    # The sites search by area name; None means "not mentioned", so it is dropped and generate_url applies its default
+    params = {k: v for k, v in search_input.items() if k not in ("area", "location") and v is not None}
+    params["location"] = search_input["area"]
 
     # Mudah has no coordinates, so it is skipped when all of its listings would be dropped anyway
-    listings = _scrape_all(params, include_mudah=specific_location is None or keep_unknown)
+    per_platform = _scrape_all(params, include_mudah=location is None or keep_unknown)
 
-    if specific_location is not None:
-        listings = location_filter.filter_by_distance(
-            listings, specific_location, keep_unknown=keep_unknown, sort_by=None,
+    # Steps 1-2: merge and save all the search results
+    names = ["PropertyGuru + iProperty", "Speedhome", "Mudah"]
+    results = scraper.merge_and_deduplicate(sources=list(zip(names, per_platform)), output_file=scraped_file)
+
+    # Step 3: filter the saved file by distance from the target point
+    if location is not None:
+        results = location_filter.filter_file(
+            scraped_file, location, output_file=output_file, sort_by=sort_by, keep_unknown=keep_unknown,
         )
-
-    results = scraper.merge_and_deduplicate(sources=[("All platforms", listings)], output_file=None)
-
-    if specific_location is not None:
-        # merge_and_deduplicate sorts by price; apply the requested order (unknown-distance listings last)
-        location_filter.sort_results(results, sort_by)
-
-    if output_file:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=4)
 
     return results
 
@@ -101,16 +102,16 @@ def search(
 if __name__ == "__main__":
 
     SEARCH_INPUT = {
-        "location": "Bukit Jalil",
+        "area": "Bukit Jalil",
         "max_price": 1500,
         "housing_type": ["master_room", "medium_room", "small_room", "studio"],
         # APU university in Bukit Jalil (approximate coordinates)
-        "specific_location": {"latitude": 3.0553, "longitude": 101.7006, "radius_km": 5},
+        "location": {"latitude": 3.0553, "longitude": 101.7006, "radius_km": 5},
     }
 
     start = time.perf_counter()
-    results = search(SEARCH_INPUT, sort_by="distance", output_file="nearby_properties.json")
+    results = search(SEARCH_INPUT, sort_by="distance")
     print(f"Total Execution Time: {time.perf_counter() - start:.2f}s")
-    print(f"Within {SEARCH_INPUT['specific_location']['radius_km']} km: {len(results)}")
+    print(f"Within {SEARCH_INPUT['location']['radius_km']} km: {len(results)} (saved in {OUTPUT_FILE})")
     for p in results:
         print(f"  {p['distance_km']:>5} km | {p['price']:<14} | {p['title']}")

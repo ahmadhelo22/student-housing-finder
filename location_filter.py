@@ -1,15 +1,17 @@
 """
 location_filter.py
 ==================
-Service that filters listings by how close they are to a specific location (Specific Location).
-Takes the search results (OUTPUT 1) and the coordinates of the target location (latitude and longitude),
-and returns only the listings inside a circle with a 5 km radius (by default) around that location,
-adding each listing's coordinates and its distance from the location in km.
+Service that filters listings by how close they are to the `location` given in SEARCH_INPUT.
+Takes the search results (OUTPUT 1, usually from the scraper's JSON file) and the target point
+(latitude and longitude), and returns only the listings inside a circle with a 5 km radius (by default)
+around that point, adding each listing's coordinates and its distance from the point in km.
 
 Where each listing's coordinates come from (in order):
 1. The listing's own coordinates field (SPEEDHOME provides it in the search results): no request needed.
 2. Its building: every unit in a building shares the building's location, so ONE detail page per building
    is enough (PropertyGuru and iProperty use the same building_id). E.g. 61 units in 11 buildings = 11 requests.
+   Buildings are matched by building_id, not by name, because the same building appears under different names
+   (e.g. "Residensi Bintang" and "Residensi Bintang, Bukit Jalil").
 3. The listing itself, for units that do not belong to a building (e.g. a villa): one detail page per listing.
 Locations from steps 2 and 3 are cached on disk, so a building already seen is never requested again.
 Mudah provides no coordinates at all, so its listings cannot be measured.
@@ -25,7 +27,7 @@ from urllib.parse import urlparse
 import Scrapper_2 as scraper
 
 
-# Default radius of the search circle around the specific location
+# Default radius of the search circle around the target point
 DEFAULT_RADIUS_KM = 5.0
 # Mean Earth radius in km
 EARTH_RADIUS_KM = 6371.0088
@@ -75,14 +77,15 @@ def _parse_coordinates(value: Any) -> Optional[Tuple[float, float]]:
     return lat, lng
 
 
-def parse_specific_location(specific_location: Dict[str, Any]) -> Tuple[float, float, float]:
-    """Validate the specific location input and return (latitude, longitude, radius in km)."""
-    coords = _parse_coordinates(specific_location)
+def parse_location(location: Dict[str, Any]) -> Tuple[float, float, float]:
+    """Validate the `location` input and return (latitude, longitude, radius in km)."""
+    if not isinstance(location, dict):
+        # The area name used to live in "location"; it is now in "area"
+        raise ValueError("location يجب أن يكون قاموساً فيه latitude و longitude، واسم المنطقة يوضع في area")
+    coords = _parse_coordinates(location)
     if coords is None:
-        raise ValueError(
-            "specific_location يجب أن يحتوي على latitude بين -90 و 90 و longitude بين -180 و 180"
-        )
-    radius_km = specific_location.get("radius_km")
+        raise ValueError("location يجب أن يحتوي على latitude بين -90 و 90 و longitude بين -180 و 180")
+    radius_km = location.get("radius_km")
     radius_km = DEFAULT_RADIUS_KM if radius_km is None else float(radius_km)
     if radius_km <= 0:
         raise ValueError("radius_km يجب أن يكون أكبر من صفر")
@@ -132,7 +135,7 @@ def _fetch_first(urls: List[str]) -> Optional[Tuple[float, float]]:
     return None
 
 
-def sort_results(listings: List[Dict[str, Any]], sort_by: Literal["price", "distance"] = "price") -> None:
+def _sort_results(listings: List[Dict[str, Any]], sort_by: Literal["price", "distance"]) -> None:
     """Sort filtered listings in place, cheapest or nearest first, with unknown-distance listings last."""
     def key(item: Dict[str, Any]):
         unknown = item.get("distance_km") is None
@@ -145,21 +148,20 @@ def sort_results(listings: List[Dict[str, Any]], sort_by: Literal["price", "dist
 
 def filter_by_distance(
     listings: List[Dict[str, Any]],
-    specific_location: Dict[str, Any],
+    location: Dict[str, Any],
     keep_unknown: bool = False,
-    sort_by: Optional[Literal["price", "distance"]] = "price",
+    sort_by: Literal["price", "distance"] = "price",
     cache_file: Optional[str] = COORDINATES_CACHE_FILE,
     output_file: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Main function: takes the search results (OUTPUT 1) and the specific location, and returns only the listings inside the radius.
-    - specific_location: {"latitude": float, "longitude": float, "radius_km": float (optional, default 5)}
+    Main function: takes the search results (OUTPUT 1) and the target point, and returns only the listings inside the radius.
+    - location: {"latitude": float, "longitude": float, "radius_km": float (optional, default 5)}
     - keep_unknown: if True, listings whose location cannot be determined are kept, at the end, with distance_km = None
-    - sort_by: "price" (cheapest first, like the rest of the code), "distance" (nearest first),
-      or None to keep the input order
+    - sort_by: "price" (cheapest first, like the rest of the code) or "distance" (nearest first)
     Each listing in the result has the same fields as OUTPUT 1, plus coordinates and distance_km.
     """
-    center_lat, center_lng, radius_km = parse_specific_location(specific_location)
+    center_lat, center_lng, radius_km = parse_location(location)
     # Maps a location key ("building:<id>" or a listing URL) to [lat, lng]
     cache = scraper._load_hash_cache(cache_file)
 
@@ -198,11 +200,22 @@ def filter_by_distance(
                 "distance_km": round(distance, 2),
             })
 
-    if sort_by is not None:
-        sort_results(results, sort_by)
+    _sort_results(results, sort_by)
 
     if output_file:
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=4)
 
     return results
+
+
+def filter_file(
+    input_file: str,
+    location: Dict[str, Any],
+    output_file: str = "nearby_properties.json",
+    **kwargs,
+) -> List[Dict[str, Any]]:
+    """Read the scraper's JSON file, filter it by distance from `location`, and save the result as a new JSON file."""
+    with open(input_file, "r", encoding="utf-8") as f:
+        listings = json.load(f)
+    return filter_by_distance(listings, location, output_file=output_file, **kwargs)
