@@ -24,8 +24,11 @@ SEARCH_INPUT = {
 }
 ```
 
-`specific_location` is not sent to the sites. When set, OUTPUT 1 is passed through
-`location_filter.filter_by_distance(listings, specific_location)` (see OUTPUT 1B).
+Run a search with `search_pipeline.search(SEARCH_INPUT)` — the single entry point:
+it scrapes all platforms at once, filters by distance when `specific_location` is set,
+then merges and removes duplicates. Returns OUTPUT 1, or OUTPUT 1B when `specific_location` is set.
+
+`specific_location` is not sent to the sites; it is applied by `location_filter` (see OUTPUT 1B).
 
 `housing_type` accepted aliases:
 
@@ -55,6 +58,8 @@ SEARCH_INPUT = {
         "thumbnail_url": str | None,
         "is_verified_agent": bool,
         "agent_name": str | None,
+        "building_id": int | None,     # PropertyGuru / iProperty building ID (same ID on both platforms)
+        "coordinates": dict | None,    # {"latitude": float, "longitude": float} — SPEEDHOME only, else None
     },
 ]
 ```
@@ -74,12 +79,17 @@ sorted by price ascending (or by distance with `sort_by="distance"`).
 ]
 ```
 
-Where each listing's coordinates come from:
+Where each listing's coordinates come from (in order):
 
-| Platform | Source |
-|---|---|
-| PropertyGuru, iProperty, SPEEDHOME | detail page (one extra request per listing, cached in `coordinates_cache.json`) |
-| Mudah | not available — dropped (or kept with `distance_km: None` when `keep_unknown=True`) |
+| # | Case | Source | Requests |
+|---|---|---|---|
+| 1 | listing has `coordinates` (SPEEDHOME) | the search results | 0 |
+| 2 | listing has `building_id` (PropertyGuru, iProperty) | detail page of one unit of that building | 1 per building |
+| 3 | no building (e.g. a villa) | the listing's own detail page | 1 per listing |
+| — | Mudah | not available — dropped (or kept with `distance_km: None` when `keep_unknown=True`); Mudah is not scraped at all when filtering, unless `keep_unknown=True` | 0 |
+
+Cases 2 and 3 are cached in `coordinates_cache.json` (keys `building:<id>` or the listing URL),
+so a building already seen is never requested again.
 
 ## INPUT 2 — Property detail
 

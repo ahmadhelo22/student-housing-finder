@@ -125,6 +125,8 @@ def _parse_listing_pages(
             floor_area_sqft = ld.get("floorArea")
             floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
             transit_info = ld.get("mrt", {}).get("nearbyText") if ld.get("mrt") else None
+            # Building (project) ID: the same building has the same ID on PropertyGuru and iProperty
+            building_id = (ld.get("property") or {}).get("id")
 
             # Agent verification status and name
             agent_info = ld.get("agent")
@@ -146,6 +148,8 @@ def _parse_listing_pages(
                 "thumbnail_url": ld.get("thumbnail"),
                 "is_verified_agent": is_agent_verified,
                 "agent_name": agent_name,
+                "building_id": building_id,
+                "coordinates": None,
             })
 
     all_extracted_properties.sort(key=_sort_key)
@@ -935,6 +939,9 @@ class Speedhome:
                 # On SPEEDHOME the lister is the owner, not an agent
                 user = item.get("user") or {}
 
+                # SPEEDHOME already includes each unit's coordinates in the search results
+                lat, lng = item.get("latitude"), item.get("longitude")
+
                 all_extracted_properties.append({
                     "title": item.get("name"),
                     "price": price_pretty,
@@ -946,6 +953,8 @@ class Speedhome:
                     "thumbnail_url": thumbnail_url,
                     "is_verified_agent": bool(user.get("isVerifiedUser")),
                     "agent_name": user.get("name"),
+                    "building_id": None,
+                    "coordinates": {"latitude": lat, "longitude": lng} if (lat and lng) else None,
                 })
 
         all_extracted_properties.sort(key=_sort_key)
@@ -1293,6 +1302,8 @@ class Mudah:
                                     "thumbnail_url": thumb,
                                     "is_verified_agent": is_verified,
                                     "agent_name": agent_name,
+                                    "building_id": None,
+                                    "coordinates": None,
                                 })
                         except Exception:
                             pass
@@ -1340,6 +1351,8 @@ class Mudah:
                         "thumbnail_url": thumb,
                         "is_verified_agent": False,
                         "agent_name": None,
+                        "building_id": None,
+                        "coordinates": None,
                     })
 
         return results
@@ -1647,20 +1660,13 @@ def merge_and_deduplicate(
                 if not existing.get("agent_name") and item.get("agent_name"):
                     existing["agent_name"] = item.get("agent_name")
                 # Fill in any detail fields available on one platform but missing on the other
-                for f in ["floor_area_sqm", "floor_area_sqft", "nearby_transit", "is_verified_agent", "agent_name"]:
+                for f in ["floor_area_sqm", "floor_area_sqft", "nearby_transit", "is_verified_agent", "agent_name", "building_id", "coordinates"]:
                     if existing.get(f) is None and item.get(f) is not None:
                         existing[f] = item.get(f)
             else:
+                # Keep every field of the listing, including extra ones added later (e.g. distance_km)
                 entry = {
-                    "title": item.get("title"),
-                    "price": item.get("price"),
-                    "address": item.get("address"),
-                    "property_url": item.get("property_url"),
-                    "floor_area_sqm": item.get("floor_area_sqm"),
-                    "floor_area_sqft": item.get("floor_area_sqft"),
-                    "nearby_transit": item.get("nearby_transit"),
-                    "thumbnail_url": item.get("thumbnail_url"),
-                    "is_verified_agent": item.get("is_verified_agent"),
+                    **item,
                     "agent_name": item.get("agent_name") or (agent_slug.replace("-", " ").title() if agent_slug else None),
                 }
                 idx = len(tier1_merged)

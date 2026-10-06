@@ -7,16 +7,17 @@ and returns only the listings inside a circle with a 5 km radius (by default) ar
 adding each listing's coordinates and its distance from the location in km.
 
 Where each listing's coordinates come from (in order):
-1. The listing's own coordinates field, if present.
-2. The on-disk coordinates cache (the same listing is never requested twice).
-3. The listing's detail page via get_property_details (PropertyGuru, iProperty and SPEEDHOME).
-   Mudah provides no coordinates at all, so its listings cannot be measured.
+1. The listing's own coordinates field (SPEEDHOME provides it in the search results): no request needed.
+2. Its building: every unit in a building shares the building's location, so ONE detail page per building
+   is enough (PropertyGuru and iProperty use the same building_id). E.g. 61 units in 11 buildings = 11 requests.
+3. The listing itself, for units that do not belong to a building (e.g. a villa): one detail page per listing.
+Locations from steps 2 and 3 are cached on disk, so a building already seen is never requested again.
+Mudah provides no coordinates at all, so its listings cannot be measured.
 """
 
 import json
 import math
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Literal, List, Dict, Any, Tuple
 from urllib.parse import urlparse
@@ -28,8 +29,10 @@ import Scrapper_2 as scraper
 DEFAULT_RADIUS_KM = 5.0
 # Mean Earth radius in km
 EARTH_RADIUS_KM = 6371.0088
-# On-disk cache of listing coordinates, so detail pages are not re-requested on every run
+# On-disk cache of building / listing coordinates, so detail pages are not re-requested on every run
 COORDINATES_CACHE_FILE = "coordinates_cache.json"
+# How many listings of the same building to try if a detail page fails (e.g. the listing was just removed)
+MAX_ATTEMPTS_PER_LOCATION = 2
 
 # Platforms that provide coordinates on the detail page (Mudah is missing because it does not)
 PLATFORMS_WITH_COORDINATES = {
@@ -72,7 +75,7 @@ def _parse_coordinates(value: Any) -> Optional[Tuple[float, float]]:
     return lat, lng
 
 
-def _parse_specific_location(specific_location: Dict[str, Any]) -> Tuple[float, float, float]:
+def parse_specific_location(specific_location: Dict[str, Any]) -> Tuple[float, float, float]:
     """Validate the specific location input and return (latitude, longitude, radius in km)."""
     coords = _parse_coordinates(specific_location)
     if coords is None:
@@ -84,6 +87,13 @@ def _parse_specific_location(specific_location: Dict[str, Any]) -> Tuple[float, 
     if radius_km <= 0:
         raise ValueError("radius_km يجب أن يكون أكبر من صفر")
     return coords[0], coords[1], radius_km
+
+
+def _location_key(item: Dict[str, Any]) -> Optional[str]:
+    """Cache key of a listing's location: its building if it belongs to one, otherwise the listing itself."""
+    if item.get("building_id") is not None:
+        return f"building:{item['building_id']}"
+    return item.get("property_url")
 
 
 def _platform_domain(url: str) -> Optional[str]:
@@ -113,107 +123,86 @@ def _fetch_coordinates(url: str) -> Optional[Tuple[float, float]]:
     return _parse_coordinates((details.get("location") or {}).get("coordinates"))
 
 
+def _fetch_first(urls: List[str]) -> Optional[Tuple[float, float]]:
+    """Try the detail pages of one location (building or listing) in order, and return the first coordinates found."""
+    for url in urls[:MAX_ATTEMPTS_PER_LOCATION]:
+        coords = _fetch_coordinates(url)
+        if coords:
+            return coords
+    return None
+
+
+def sort_results(listings: List[Dict[str, Any]], sort_by: Literal["price", "distance"] = "price") -> None:
+    """Sort filtered listings in place, cheapest or nearest first, with unknown-distance listings last."""
+    def key(item: Dict[str, Any]):
+        unknown = item.get("distance_km") is None
+        if sort_by == "distance":
+            return unknown, item.get("distance_km") or 0.0
+        return unknown, scraper._sort_key(item)
+
+    listings.sort(key=key)
+
+
 def filter_by_distance(
     listings: List[Dict[str, Any]],
     specific_location: Dict[str, Any],
     keep_unknown: bool = False,
-    sort_by: Literal["price", "distance"] = "price",
+    sort_by: Optional[Literal["price", "distance"]] = "price",
     cache_file: Optional[str] = COORDINATES_CACHE_FILE,
     output_file: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Main function: takes the search results (OUTPUT 1) and the specific location, and returns only the listings inside the radius.
     - specific_location: {"latitude": float, "longitude": float, "radius_km": float (optional, default 5)}
-    - keep_unknown: if True, listings whose location cannot be determined are appended at the end with distance_km = None
-    - sort_by: "price" (cheapest first, like the rest of the code) or "distance" (nearest first)
+    - keep_unknown: if True, listings whose location cannot be determined are kept, at the end, with distance_km = None
+    - sort_by: "price" (cheapest first, like the rest of the code), "distance" (nearest first),
+      or None to keep the input order
     Each listing in the result has the same fields as OUTPUT 1, plus coordinates and distance_km.
     """
-    center_lat, center_lng, radius_km = _parse_specific_location(specific_location)
+    center_lat, center_lng, radius_km = parse_specific_location(specific_location)
+    # Maps a location key ("building:<id>" or a listing URL) to [lat, lng]
     cache = scraper._load_hash_cache(cache_file)
 
-    # 1. Collect coordinates that are already known (from the listing itself or from the cache)
-    known: Dict[str, Tuple[float, float]] = {}
-    missing: List[str] = []
+    # 1. Group the listings that still need a location by building (or by listing when there is no building)
+    pending: Dict[str, List[str]] = {}
     for item in listings:
+        key = _location_key(item)
+        if not key or _parse_coordinates(item.get("coordinates")) or _parse_coordinates(cache.get(key)):
+            continue
         url = item.get("property_url")
-        coords = _parse_coordinates(item.get("coordinates")) or _parse_coordinates(cache.get(url))
-        if coords:
-            if url:
-                known[url] = coords
-        elif url and url not in missing and _platform_domain(url):
-            missing.append(url)
+        if url and _platform_domain(url):
+            pending.setdefault(key, []).append(url)
 
-    # 2. Request the missing detail pages concurrently, with a cap on simultaneous requests to avoid being blocked
-    if missing:
+    # 2. One detail request per unknown location, all at once, with a cap on simultaneous requests to avoid being blocked
+    if pending:
+        keys = list(pending)
         with ThreadPoolExecutor(max_workers=scraper.MAX_CONCURRENCY) as pool:
-            for url, coords in zip(missing, pool.map(_fetch_coordinates, missing)):
+            for key, coords in zip(keys, pool.map(_fetch_first, (pending[k] for k in keys))):
                 if coords:
-                    known[url] = coords
-                    cache[url] = list(coords)
+                    cache[key] = list(coords)
         scraper._save_hash_cache(cache_file, cache)
 
     # 3. Compute the distance and keep only the listings inside the circle
-    nearby, unknown = [], []
+    results = []
     for item in listings:
-        coords = _parse_coordinates(item.get("coordinates")) or known.get(item.get("property_url"))
+        coords = _parse_coordinates(item.get("coordinates")) or _parse_coordinates(cache.get(_location_key(item)))
         if coords is None:
             if keep_unknown:
-                unknown.append({**item, "coordinates": None, "distance_km": None})
+                results.append({**item, "coordinates": None, "distance_km": None})
             continue
         distance = haversine_km(center_lat, center_lng, coords[0], coords[1])
         if distance <= radius_km:
-            nearby.append({
+            results.append({
                 **item,
                 "coordinates": {"latitude": coords[0], "longitude": coords[1]},
                 "distance_km": round(distance, 2),
             })
 
-    if sort_by == "distance":
-        nearby.sort(key=lambda p: p["distance_km"])
-    else:
-        nearby.sort(key=scraper._sort_key)
-        unknown.sort(key=scraper._sort_key)
-    results = nearby + unknown
+    if sort_by is not None:
+        sort_results(results, sort_by)
 
     if output_file:
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=4)
 
     return results
-
-
-if __name__ == "__main__":
-
-    location = "Bukit Jalil"
-    max_price = 1500
-    housing_type = ["master_room", "medium_room"]
-    # APU university in Bukit Jalil (approximate coordinates)
-    specific_location = {"latitude": 3.0553, "longitude": 101.7006, "radius_km": 5}
-
-    pg = scraper.Propertyguru()
-    ip = scraper.IProperties()
-    sh = scraper.Speedhome()
-
-    total_start = time.perf_counter()
-
-    # 1. Scrape all three sites together
-    listings_pg, listings_ip, listings_sh = scraper.scrape_sites_parallel([
-        (pg, pg.generate_url(location=location, max_price=max_price, housing_type=housing_type), None),
-        (ip, ip.generate_url(location=location, max_price=max_price, housing_type=housing_type), None),
-        (sh, sh.generate_url(location=location, max_price=max_price, housing_type=housing_type), None),
-    ])
-
-    # 2. Merge the results and remove duplicates
-    merged = scraper.merge_and_deduplicate(
-        sources=[("PropertyGuru", listings_pg), ("iProperty", listings_ip), ("Speedhome", listings_sh)],
-        output_file=None,
-    )
-
-    # 3. Filter the listings by distance from the specific location
-    t = time.perf_counter()
-    nearby = filter_by_distance(merged, specific_location, sort_by="distance", output_file="nearby_properties.json")
-    print(f"Distance filtering took: {time.perf_counter() - t:.2f}s")
-    print(f"Total Execution Time: {time.perf_counter() - total_start:.2f}s")
-    print(f"Merged: {len(merged)} | Within {specific_location['radius_km']} km: {len(nearby)}")
-    for p in nearby:
-        print(f"  {p['distance_km']:>5} km | {p['price']:<14} | {p['title']}")
