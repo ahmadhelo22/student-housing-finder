@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# ملفات الناتج والذاكرة التي تُنشأ عند التشغيل
+*.json
+
+# Images (not uploaded)
+*.svg
+*.png
+*.jpg
+*.jpeg
