@@ -23,11 +23,11 @@ All modules sit in the project root; `core.py` imports `search_pipeline` from it
 
 ## Installation
 
-Requires Python 3.10+ (developed on 3.14). There is no `requirements.txt`; install the third-party packages directly:
+Requires Python 3.10+ (developed on 3.14). Install the third-party packages from `requirements.txt` before running the code:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install anthropic python-dotenv pyTelegramBotAPI flask curl_cffi selectolax
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## Configuration
