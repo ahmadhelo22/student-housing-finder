@@ -29,7 +29,7 @@ def _safe(platform_name: str, task: Callable[[], List[Dict[str, Any]]]) -> List[
     try:
         return task()
     except Exception as e:
-        print(f"[تنبيه] فشل السحب من {platform_name}: {e}")
+        print(f"[WARNING] Scraping failed for {platform_name}: {e}")
         return []
 
 
@@ -72,7 +72,7 @@ def search(
       saved in output_file. sort_by and keep_unknown only apply in this case (see location_filter.filter_by_distance).
     """
     if not search_input.get("area") or search_input.get("max_price") is None:
-        raise ValueError("area و max_price مطلوبان في SEARCH_INPUT")
+        raise ValueError("area and max_price are required in SEARCH_INPUT")
 
     location = search_input.get("location")
     if location is not None:

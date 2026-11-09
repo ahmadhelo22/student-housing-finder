@@ -97,7 +97,7 @@ def _parse_listing_pages(
     for current_url, html in zip(urls, pages):
         raw_json = _extract_next_data(html)
         if not raw_json:
-            print(f"[تنبيه] لم يتم العثور على وسم __NEXT_DATA__ في {platform_name}. قد يكون الموقع أرسل صفحة حظر كابتشا (DataDome).")
+            print(f"[WARNING] __NEXT_DATA__ tag not found on {platform_name}. The site may have returned a CAPTCHA block page (DataDome).")
             continue
 
         page_data = raw_json.get("props", {}).get("pageProps", {}).get("pageData", {})
@@ -385,7 +385,7 @@ class IProperties:
                 raw_json = json.loads(match.group(1))
                 
         if not raw_json:
-            print(f"[تنبيه] لم يتم العثور على بيانات تفاصيل العقار: {property_url}")
+            print(f"[WARNING] Property detail data not found: {property_url}")
             return {
                 "property_url": property_url,
                 "title": None,
@@ -643,7 +643,7 @@ class Propertyguru:
                 raw_json = json.loads(match.group(1))
                 
         if not raw_json:
-            print(f"[تنبيه] لم يتم العثور على بيانات تفاصيل العقار: {property_url}")
+            print(f"[WARNING] Property detail data not found: {property_url}")
             return {
                 "property_url": property_url,
                 "title": None,
@@ -905,7 +905,7 @@ class Speedhome:
         for parts, html in zip(split_urls, pages):
             raw_json = _extract_next_data(html)
             if not raw_json:
-                print(f"[تنبيه] لم يتم العثور على وسم __NEXT_DATA__ في {self.platform_name}.")
+                print(f"[WARNING] __NEXT_DATA__ tag not found on {self.platform_name}.")
                 continue
 
             local_filters = {k: v[0] for k, v in parse_qs(parts[1]).items()}
@@ -975,7 +975,7 @@ class Speedhome:
         info = (raw_json or {}).get("props", {}).get("pageProps", {}).get("propertyInfo")
 
         if not info:
-            print(f"[تنبيه] لم يتم العثور على بيانات تفاصيل العقار: {property_url}")
+            print(f"[WARNING] Property detail data not found: {property_url}")
             return {
                 "property_url": property_url,
                 "title": None,
@@ -1442,7 +1442,7 @@ class Mudah:
                     pass
 
         if not attrs:
-            print(f"[تنبيه] لم يتم العثور على بيانات تفاصيل العقار: {property_url}")
+            print(f"[WARNING] Property detail data not found: {property_url}")
             return {
                 "property_url": property_url,
                 "title": None,

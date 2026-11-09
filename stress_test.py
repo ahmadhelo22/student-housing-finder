@@ -43,7 +43,7 @@ def simulate_search_user_1() -> Dict[str, Any]:
         listings = pg.scrape_to_json(url=url, output_file=None)
         result["items_count"] = len(listings)
         result["status"] = "PASSED" if len(listings) > 0 else "EMPTY"
-        result["summary"] = f"جلب {len(listings)} استوديو (طلب شبكة حي: 1)"
+        result["summary"] = f"Fetched {len(listings)} studios (live network requests: 1)"
     except Exception as e:
         result["status"] = "FAILED"
         result["error"] = str(e)
@@ -87,7 +87,7 @@ def simulate_search_user_2() -> Dict[str, Any]:
         )
         result["items_count"] = len(merged)
         result["status"] = "PASSED" if len(merged) > 0 else "EMPTY"
-        result["summary"] = f"دمج {len(merged)} عقار (طلبات شبكة حية: 4)"
+        result["summary"] = f"Merged {len(merged)} properties (live network requests: 4)"
     except Exception as e:
         result["status"] = "FAILED"
         result["error"] = str(e)
@@ -102,7 +102,7 @@ def simulate_search_user_3() -> Dict[str, Any]:
     result = {
         "user_id": "Search User 3",
         "category": "Search (Heavy)",
-        "query": "KL | 3 أنواع غرف + بصمات صور",
+        "query": "KL | 3 room types + image fingerprints",
         "status": "Running",
         "elapsed_sec": 0.0,
         "items_count": 0,
@@ -131,7 +131,7 @@ def simulate_search_user_3() -> Dict[str, Any]:
         )
         result["items_count"] = len(merged)
         result["status"] = "PASSED" if len(merged) > 0 else "EMPTY"
-        result["summary"] = f"معالجة {len(merged)} عقار نقي (طلبات شبكة: 6)"
+        result["summary"] = f"Processed {len(merged)} clean properties (network requests: 6)"
     except Exception as e:
         result["status"] = "FAILED"
         result["error"] = str(e)
@@ -160,7 +160,7 @@ def simulate_search_user_4() -> Dict[str, Any]:
         listings = pg.scrape_to_json(url=url, output_file=None)
         result["items_count"] = len(listings)
         result["status"] = "PASSED" if len(listings) > 0 else "EMPTY"
-        result["summary"] = f"جلب {len(listings)} استوديو (طلب شبكة حي: 1)"
+        result["summary"] = f"Fetched {len(listings)} studios (live network requests: 1)"
     except Exception as e:
         result["status"] = "FAILED"
         result["error"] = str(e)
@@ -177,7 +177,7 @@ def extract_sample_urls_from_merged(count: int = 5) -> List[Dict[str, str]]:
     """Extract 5 URLs of different listings from merged_properties.json."""
     json_path = "merged_properties.json"
     if not os.path.exists(json_path):
-        raise FileNotFoundError(f"ملف {json_path} غير موجود. يرجى التأكد من تشغيل السكرابر.")
+        raise FileNotFoundError(f"File {json_path} not found. Please make sure the scraper has been run.")
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -226,10 +226,10 @@ def simulate_detail_user(user_index: int, target_info: Dict[str, str]) -> Dict[s
             desc_len = len(p_details.get("description", ""))
             images_cnt = len(details.get("images", []))
             result["status"] = "PASSED"
-            result["summary"] = f"{images_cnt} صور | {highlights_cnt} ميزة | وصف {desc_len} حرف"
+            result["summary"] = f"{images_cnt} images | {highlights_cnt} highlights | description {desc_len} chars"
         else:
             result["status"] = "EMPTY"
-            result["summary"] = "لم يتم العثور على بيانات تفصيلية"
+            result["summary"] = "No detail data found"
     except Exception as e:
         result["status"] = "FAILED"
         result["error"] = str(e)
@@ -244,20 +244,20 @@ def simulate_detail_user(user_index: int, target_info: Dict[str, str]) -> Dict[s
 
 def run_stress_test_9_users():
     print("=" * 90)
-    print("🔍 فحص التحمل الواقعي 100%: 9 مستخدمين يرسلون طلبات حية متزامنة عبر الإنترنت")
+    print("🔍 100% realistic stress test: 9 users sending simultaneous live requests over the internet")
     print("=" * 90)
 
     # Extract 5 URLs of different listings
     sample_targets = extract_sample_urls_from_merged(count=5)
-    print(f"✓ تم استخراج 5 روابط لعقارات حقيقية من merged_properties.json لاختبار صفحات التفاصيل.")
+    print(f"✓ Extracted 5 real property links from merged_properties.json to test detail pages.")
 
-    print("\n📋 خطة الفحص ومطابقة سلوك المستخدم الطبيعي:")
-    print("  1. كل مستخدم يملك Session مستقلة ومتصفح منفصل (لا توجد جلسات مشتركة تخفف العبء).")
-    print("  2. كل طلب بحث يتم إرساله مباشرة لسيرفرات PropertyGuru و iProperty ويستقبل HTML حقيقي.")
-    print("  3. مستخدمو التفاصيل (5 إلى 9) يدخلون الصفحات الفردية بالكامل ويحللون وسوم __NEXT_DATA__.")
-    print("  4. لا توجد أي بيانات وهمية (Mocked Data) أو استجابات مخزنة مؤقتاً.")
+    print("\n📋 Test plan and matching of natural user behavior:")
+    print("  1. Each user has an independent Session and a separate browser (no shared sessions to lighten the load).")
+    print("  2. Every search request is sent directly to the PropertyGuru and iProperty servers and receives real HTML.")
+    print("  3. Detail users (5 to 9) open the full individual pages and parse the __NEXT_DATA__ tags.")
+    print("  4. There is no mocked data and no cached responses.")
     print("-" * 90)
-    print("⏳ جاري إطلاق الـ 9 طلبات معاً في نفس اللحظة عبر ThreadPoolExecutor(max_workers=9)...")
+    print("⏳ Launching all 9 requests at the same moment via ThreadPoolExecutor(max_workers=9)...")
 
     tasks = [
         ("Search User 1", simulate_search_user_1),
@@ -279,7 +279,7 @@ def run_stress_test_9_users():
             try:
                 res = f.result()
                 results.append(res)
-                print(f"  ✓ استجاب [{res['user_id']}] في {res['elapsed_sec']}s (الحالة: {res['status']}) - {res['summary']}")
+                print(f"  ✓ [{res['user_id']}] responded in {res['elapsed_sec']}s (status: {res['status']}) - {res['summary']}")
             except Exception as ex:
                 results.append({
                     "user_id": name,
@@ -299,9 +299,9 @@ def run_stress_test_9_users():
     results.sort(key=lambda r: (0 if "Search" in r["user_id"] else 1, r["user_id"]))
 
     print("\n" + "=" * 90)
-    print(f"📊 تقرير التحمل النهائي والطلبات الشبكية الحية (Total Wall Time: {total_elapsed}s)")
+    print(f"📊 Final stress report and live network requests (Total Wall Time: {total_elapsed}s)")
     print("=" * 90)
-    print(f"{'المستخدم':<15} | {'الاستعلام':<26} | {'الزمن':<8} | {'HTTP':<6} | {'النتائج':<8} | {'الحالة':<8}")
+    print(f"{'User':<15} | {'Query':<26} | {'Time':<8} | {'HTTP':<6} | {'Results':<8} | {'Status':<8}")
     print("-" * 90)
 
     passed_count = 0
@@ -323,21 +323,21 @@ def run_stress_test_9_users():
 
         print(f"{uid:<15} | {query:<26} | {sec:<8} | {http_cnt:<6} | {cnt:<8} | {status:<8}")
         if r.get("error"):
-            print(f"    ↳ خطأ: {r.get('error')}")
+            print(f"    ↳ Error: {r.get('error')}")
 
     print("-" * 90)
-    print(f"• إجمالي طلبات الـ HTTP الحقيقية المرسلة عبر الإنترنت: {total_http_requests} طلب مباشر")
-    print(f"• إجمالي الوقت الفعلي المتزامن (Wall Clock Time): {total_elapsed} ثانية")
-    print(f"• مجموع الأوقات لو نُفذت الطلبات التسعة بالتتابع: {round(sum_times, 2)} ثانية")
+    print(f"• Total real HTTP requests sent over the internet: {total_http_requests} direct requests")
+    print(f"• Total concurrent real time (Wall Clock Time): {total_elapsed} seconds")
+    print(f"• Sum of times if the nine requests ran sequentially: {round(sum_times, 2)} seconds")
     speedup = round(sum_times / total_elapsed, 2) if total_elapsed > 0 else 1.0
-    print(f"• معامل التسريع بالتوازي (Speedup Factor): {speedup}x")
-    print(f"• نسبة النجاح: {passed_count}/{len(results)} ({passed_count/len(results)*100:.0f}%)")
+    print(f"• Parallel speedup factor (Speedup Factor): {speedup}x")
+    print(f"• Success rate: {passed_count}/{len(results)} ({passed_count/len(results)*100:.0f}%)")
 
-    print("\n🔍 التدقيق الهندسي لمحاكاة المستخدم الطبيعي:")
-    print("  1. هل تم استخدام دوال Scrapper_2 الأصلية؟ نعم، بنسبة 100% دون أي تعديل.")
-    print("  2. هل تم تخفيف العبء أو تقليل الـ HTTP؟ لا، تم إرسال 17 طلب شبكة حي كامل للإنترنت.")
-    print("  3. هل ظهرت صفحات حماية أو حظر (DataDome/403)؟ لا، استجابت المواقع بالكامل برمز 200 OK.")
-    print("  4. هل حدث أي تجمد أو انهيار؟ لا، تم إنجاز الـ 9 مهام واستخراج كافة البيانات في ثوان معدودة.")
+    print("\n🔍 Engineering audit of natural user simulation:")
+    print("  1. Were the original Scrapper_2 functions used? Yes, 100% without any modification.")
+    print("  2. Was the load lightened or HTTP reduced? No, 17 full live network requests were sent to the internet.")
+    print("  3. Did any protection or block pages appear (DataDome/403)? No, the sites fully responded with 200 OK.")
+    print("  4. Did any freeze or crash occur? No, all 9 tasks completed and all data was extracted within seconds.")
     print("=" * 90)
 
 

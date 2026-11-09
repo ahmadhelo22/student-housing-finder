@@ -81,14 +81,14 @@ def parse_location(location: Dict[str, Any]) -> Tuple[float, float, float]:
     """Validate the `location` input and return (latitude, longitude, radius in km)."""
     if not isinstance(location, dict):
         # The area name used to live in "location"; it is now in "area"
-        raise ValueError("location يجب أن يكون قاموساً فيه latitude و longitude، واسم المنطقة يوضع في area")
+        raise ValueError("location must be a dict containing latitude and longitude; the area name goes in area")
     coords = _parse_coordinates(location)
     if coords is None:
-        raise ValueError("location يجب أن يحتوي على latitude بين -90 و 90 و longitude بين -180 و 180")
+        raise ValueError("location must contain latitude between -90 and 90 and longitude between -180 and 180")
     radius_km = location.get("radius_km")
     radius_km = DEFAULT_RADIUS_KM if radius_km is None else float(radius_km)
     if radius_km <= 0:
-        raise ValueError("radius_km يجب أن يكون أكبر من صفر")
+        raise ValueError("radius_km must be greater than zero")
     return coords[0], coords[1], radius_km
 
 

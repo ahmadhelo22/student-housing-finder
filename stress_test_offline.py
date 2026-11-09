@@ -587,7 +587,7 @@ FUZZ = [
     ("area empty string", {"area": ""}, "reject"),
     ("area only spaces", {"area": "   "}, "reject"),
     ("area 20,000 characters", {"area": "K" * 20000}, "reject"),
-    ("area Arabic text", {"area": "كوالالمبور"}, "accept"),
+    ("area Arabic text", {"area": "\u0643\u0648\u0627\u0644\u0627\u0644\u0645\u0628\u0648\u0631"}, "accept"),
     ("area with CRLF header injection", {"area": "KL\r\nX-Evil: 1"}, "accept"),
     ("area with URL parameter injection", {"area": "KL&maxPrice=1&page=999"}, "accept"),
     ("area is a number", {"area": 12345}, "reject"),
